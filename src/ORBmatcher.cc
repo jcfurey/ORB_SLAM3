@@ -356,7 +356,7 @@ namespace ORB_SLAM3
 
                         if(bestDist1R<=TH_LOW)
                         {
-                            if(static_cast<float>(bestDist1R)<mfNNratio*static_cast<float>(bestDist2R) || true)
+                            if(static_cast<float>(bestDist1R)<mfNNratio*static_cast<float>(bestDist2R))
                             {
                                 vpMapPointMatches[bestIdxFR]=pMP;
 

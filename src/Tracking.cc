@@ -3763,6 +3763,11 @@ bool Tracking::Relocalization()
         }
     }
 
+    // Free the per-candidate MLPnP solvers allocated above; previously these were
+    // leaked on every relocalization attempt on both return paths.
+    for(MLPnPsolver* pSolver : vpMLPnPsolvers)
+        delete pSolver;
+
     if(!bMatch)
     {
         return false;

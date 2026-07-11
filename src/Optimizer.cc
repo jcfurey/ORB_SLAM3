@@ -340,7 +340,7 @@ void Optimizer::BundleAdjustment(const vector<KeyFrame *> &vpKFs, const vector<M
                 {
                     g2o::EdgeStereoSE3ProjectXYZ* e = vpEdgesStereo[i2];
                     MapPoint* pMP = vpMapPointEdgeStereo[i2];
-                    KeyFrame* pKFedge = vpEdgeKFMono[i2];
+                    KeyFrame* pKFedge = vpEdgeKFStereo[i2];
 
                     if(pKF != pKFedge)
                     {
@@ -5363,7 +5363,7 @@ void Optimizer::OptimizeEssentialGraph4DoF(Map* pMap, KeyFrame* pLoopKF, KeyFram
     Eigen::Matrix<double,6,6> matLambda = Eigen::Matrix<double,6,6>::Identity();
     matLambda(0,0) = 1e3;
     matLambda(1,1) = 1e3;
-    matLambda(0,0) = 1e3;
+    matLambda(2,2) = 1e3;
 
     // Set Loop edges
     Edge4DoF* e_loop;

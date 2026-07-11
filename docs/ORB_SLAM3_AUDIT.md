@@ -9,11 +9,12 @@
 > a sample of the high-severity items was additionally hand-checked against the code.
 > Of the verifications that completed, **28 confirmed / 5 plausible / 1 refuted**.
 >
-> **This audit changed no algorithm code** except the one bug already fixed on this
-> branch (see below). The suggested fixes are *proposals*: ORB-SLAM3's behaviour is
-> numerically sensitive, so review each against your own datasets before applying.
-> Line numbers refer to this checkout. "Confidence" is the reviewer's, tempered by
-> verification; treat `low`/`plausible` items as leads, not conclusions.
+> A **curated batch of high-confidence fixes has been applied** on this branch
+> (see "Already fixed" below); the remaining suggested fixes are *proposals*:
+> ORB-SLAM3's behaviour is numerically sensitive, so review each against your own
+> datasets before applying. Line numbers refer to this checkout. "Confidence" is
+> the reviewer's, tempered by verification; treat `low`/`plausible` items as leads,
+> not conclusions.
 
 ## Summary
 
@@ -35,6 +36,29 @@
   is `int`. Fixed by typing it `int` (which also makes it C++17-legal — `bool operator++`
   was removed in C++17). *Reference: Mur-Artal & Tardós, "ORB-SLAM2", IEEE T-RO 33(5),
   2017, §V (loop closing / full BA); ORB-SLAM2 source `LoopClosing.h`.*
+
+The following high-confidence fixes were also applied (each matches sibling code or
+the upstream reference; the corresponding finding below has the full analysis):
+
+- **`ORBmatcher.cc` `SearchByBoW` right-camera match** — removed the `|| true` that
+  unconditionally bypassed the Lowe ratio test, restoring symmetry with the
+  left-camera branch.
+- **`MLPnPsolver.cc` RANSAC loop** — `||` → `&&` so a single `iterate()` respects its
+  per-call budget instead of draining `mRansacMaxIts` (matches `Sim3Solver`/`PnPsolver`).
+- **`MLPnPsolver.cc` iteration count** — `pow(ε,3)` → `pow(ε, mRansacMinSet)`; the MLPnP
+  minimal sample is 6 points, not 3, so RANSAC no longer terminates far too early.
+- **`Optimizer.cc` GBA stereo diagnostics** — `vpEdgeKFMono[i2]` → `vpEdgeKFStereo[i2]`
+  in the stereo-edge loop (copy-paste index bug).
+- **`Optimizer.cc` 4-DoF pose graph** — the essential-graph information matrix set
+  `matLambda(0,0)` twice and never `(2,2)`; now sets `(2,2) = 1e3`.
+- **`Tracking.cc` `Relocalization`** — free the per-candidate `MLPnPsolver`s on both
+  return paths (they were leaked every relocalization attempt). This surfaced a
+  latent upstream bug — **`MLPnPsolver::~MLPnPsolver()` was declared but never
+  defined** — now given its (trivial) definition in `MLPnPsolver.cpp`.
+
+All of the above were verified to compile and link, and the node built on top runs
+on ROS 2 Jazzy. They **do** change tracking/relocalization behaviour (for the
+better, per the references) — validate on your datasets.
 
 
 ## High severity

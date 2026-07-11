@@ -96,6 +96,11 @@ namespace ORB_SLAM3 {
         SetRansacParameters();
     }
 
+    // Declared in MLPnPsolver.h but never defined upstream; it was only latent
+    // because the solver was always leaked. Now that Relocalization() deletes it,
+    // the (trivial — all members are RAII) destructor must exist.
+    MLPnPsolver::~MLPnPsolver() {}
+
     //RANSAC methods
     bool MLPnPsolver::iterate(int nIterations, bool &bNoMore, vector<bool> &vbInliers, int &nInliers, Eigen::Matrix4f &Tout){
         Tout.setIdentity();
@@ -112,7 +117,7 @@ namespace ORB_SLAM3 {
 	    vector<size_t> vAvailableIndices;
 
 	    int nCurrentIterations = 0;
-	    while(mnIterations<mRansacMaxIts || nCurrentIterations<nIterations)
+	    while(mnIterations<mRansacMaxIts && nCurrentIterations<nIterations)
 	    {
 	        nCurrentIterations++;
 	        mnIterations++;
@@ -250,7 +255,7 @@ namespace ORB_SLAM3 {
 	    if(mRansacMinInliers==N)
 	        nIterations=1;
 	    else
-	        nIterations = ceil(log(1-mRansacProb)/log(1-pow(mRansacEpsilon,3)));
+	        nIterations = ceil(log(1-mRansacProb)/log(1-pow(mRansacEpsilon,mRansacMinSet)));
 
 	    mRansacMaxIts = max(1,min(nIterations,mRansacMaxIts));
 
