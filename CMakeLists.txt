@@ -60,7 +60,10 @@ find_package(ament_cmake_auto REQUIRED)
 # resolve these (their rosdep keys are not CMake package-config names), so they
 # are found explicitly and linked by hand below.
 find_package(OpenCV REQUIRED)
-find_package(eigen3_cmake_module QUIET)   # optional: cleaner Eigen3 export under ament
+# eigen3_cmake_module makes find_package(Eigen3) populate Eigen3_INCLUDE_DIRS so
+# ament_export_dependencies(Eigen3) actually propagates Eigen's headers to
+# downstream (Eigen3's own config only provides the Eigen3::Eigen target).
+find_package(eigen3_cmake_module REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(Boost REQUIRED COMPONENTS serialization)
 find_package(OpenSSL REQUIRED)            # System.cc uses the OpenSSL MD5 API
@@ -193,7 +196,7 @@ ament_export_include_directories(
   include/CameraModels
   include/Thirdparty/Sophus)
 ament_export_libraries(DBoW2 g2o)
-ament_export_dependencies(OpenCV Eigen3 Boost OpenSSL)
+ament_export_dependencies(eigen3_cmake_module OpenCV Eigen3 Boost OpenSSL)
 if(USE_PANGOLIN)
   ament_export_dependencies(Pangolin)
 endif()
