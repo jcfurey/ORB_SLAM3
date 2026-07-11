@@ -1,0 +1,352 @@
+#include "orb_slam3_ros/orb_slam3_node.hpp"
+
+#include <chrono>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+#include <ament_index_cpp/get_package_share_directory.hpp>
+#include <cv_bridge/cv_bridge.hpp>
+#include <diagnostic_msgs/msg/diagnostic_status.hpp>
+#include <geometry_msgs/msg/transform_stamped.hpp>
+#include <lifecycle_msgs/msg/state.hpp>
+#include <sensor_msgs/image_encodings.hpp>
+#include <sensor_msgs/point_cloud2_iterator.hpp>
+#include <tf2_eigen/tf2_eigen.hpp>
+
+#include <Eigen/Geometry>
+
+#include "MapPoint.h"
+
+using namespace std::chrono_literals;
+
+namespace orb_slam3_ros
+{
+namespace
+{
+// ORB_SLAM3::Tracking::eTrackingState values (kept as literals to avoid pulling
+// in the internal Tracking.h enum): OK == 2, RECENTLY_LOST == 3, LOST == 4.
+constexpr int kOk = 2;
+}  // namespace
+
+OrbSlam3LifecycleNode::OrbSlam3LifecycleNode(
+  const std::string & node_name,
+  ORB_SLAM3::System::eSensor sensor,
+  const rclcpp::NodeOptions & options)
+: rclcpp_lifecycle::LifecycleNode(node_name, options),
+  sensor_type_(sensor),
+  last_track_time_(0, 0, RCL_ROS_TIME)
+{
+  std::string default_voc;
+  try {
+    default_voc =
+      ament_index_cpp::get_package_share_directory("orb_slam3") + "/vocabulary/ORBvoc.txt";
+  } catch (const std::exception &) {
+    default_voc = "";
+  }
+
+  declare_parameter<std::string>("voc_file", default_voc);
+  declare_parameter<std::string>("settings_file", "");
+  declare_parameter<bool>("use_pangolin_viewer", false);
+  declare_parameter<std::string>("world_frame_id", "map");
+  declare_parameter<std::string>("camera_frame_id", "camera");
+  declare_parameter<std::string>("qos_reliability", "sensor_data");  // "sensor_data"|"reliable"
+  declare_parameter<int>("qos_depth", 5);
+  declare_parameter<bool>("publish_tf", true);
+  declare_parameter<bool>("publish_pose", true);
+  declare_parameter<bool>("publish_path", true);
+  declare_parameter<bool>("publish_pointcloud", true);
+  autostart_ = declare_parameter<bool>("autostart", true);
+
+  if (autostart_) {
+    // Self-drive the lifecycle to ACTIVE shortly after the executor starts.
+    autostart_timer_ = create_wall_timer(200ms, [this]() {
+      autostart_timer_->cancel();
+      RCLCPP_INFO(get_logger(), "autostart: configure + activate");
+      if (configure().id() ==
+        lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE)
+      {
+        activate();
+      }
+    });
+  }
+}
+
+OrbSlam3LifecycleNode::~OrbSlam3LifecycleNode()
+{
+  if (slam_) {
+    slam_->Shutdown();
+    slam_.reset();
+  }
+}
+
+OrbSlam3LifecycleNode::CallbackReturn
+OrbSlam3LifecycleNode::on_configure(const rclcpp_lifecycle::State &)
+{
+  voc_file_ = get_parameter("voc_file").as_string();
+  settings_file_ = get_parameter("settings_file").as_string();
+  use_viewer_ = get_parameter("use_pangolin_viewer").as_bool();
+  world_frame_id_ = get_parameter("world_frame_id").as_string();
+  camera_frame_id_ = get_parameter("camera_frame_id").as_string();
+  qos_reliability_ = get_parameter("qos_reliability").as_string();
+  qos_depth_ = get_parameter("qos_depth").as_int();
+  publish_tf_ = get_parameter("publish_tf").as_bool();
+  publish_pose_ = get_parameter("publish_pose").as_bool();
+  publish_path_ = get_parameter("publish_path").as_bool();
+  publish_pointcloud_ = get_parameter("publish_pointcloud").as_bool();
+
+  if (settings_file_.empty()) {
+    RCLCPP_ERROR(get_logger(), "Parameter 'settings_file' (ORB-SLAM3 .yaml) is required.");
+    return CallbackReturn::FAILURE;
+  }
+
+  RCLCPP_INFO(get_logger(), "Vocabulary : %s", voc_file_.c_str());
+  RCLCPP_INFO(get_logger(), "Settings   : %s", settings_file_.c_str());
+  RCLCPP_INFO(get_logger(), "TF frames  : %s -> %s",
+    world_frame_id_.c_str(), camera_frame_id_.c_str());
+  RCLCPP_INFO(get_logger(), "Sub QoS    : %s (depth %d)", qos_reliability_.c_str(), qos_depth_);
+
+  try {
+    slam_ = std::make_shared<ORB_SLAM3::System>(
+      voc_file_, settings_file_, sensor_type_, use_viewer_);
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(get_logger(), "Failed to construct ORB-SLAM3 System: %s", e.what());
+    return CallbackReturn::FAILURE;
+  }
+
+  pose_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("~/pose", rclcpp::QoS(10));
+  path_pub_ = create_publisher<nav_msgs::msg::Path>("~/path", rclcpp::QoS(10));
+  cloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>("~/map_points", rclcpp::QoS(1));
+  tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
+
+  diag_ = std::make_shared<diagnostic_updater::Updater>(this);
+  diag_->setHardwareID("orb_slam3");
+  diag_->add("tracking", this, &OrbSlam3LifecycleNode::produceDiagnostics);
+
+  path_ = nav_msgs::msg::Path();
+  path_.header.frame_id = world_frame_id_;
+  return CallbackReturn::SUCCESS;
+}
+
+OrbSlam3LifecycleNode::CallbackReturn
+OrbSlam3LifecycleNode::on_activate(const rclcpp_lifecycle::State &)
+{
+  pose_pub_->on_activate();
+  path_pub_->on_activate();
+  cloud_pub_->on_activate();
+  createSubscriptions();
+  active_.store(true);
+  RCLCPP_INFO(get_logger(), "activated");
+  return CallbackReturn::SUCCESS;
+}
+
+OrbSlam3LifecycleNode::CallbackReturn
+OrbSlam3LifecycleNode::on_deactivate(const rclcpp_lifecycle::State &)
+{
+  active_.store(false);
+  destroySubscriptions();
+  pose_pub_->on_deactivate();
+  path_pub_->on_deactivate();
+  cloud_pub_->on_deactivate();
+  RCLCPP_INFO(get_logger(), "deactivated");
+  return CallbackReturn::SUCCESS;
+}
+
+OrbSlam3LifecycleNode::CallbackReturn
+OrbSlam3LifecycleNode::on_cleanup(const rclcpp_lifecycle::State &)
+{
+  destroySubscriptions();
+  diag_.reset();
+  tf_broadcaster_.reset();
+  pose_pub_.reset();
+  path_pub_.reset();
+  cloud_pub_.reset();
+  if (slam_) {
+    slam_->Shutdown();
+    slam_.reset();
+  }
+  {
+    std::lock_guard<std::mutex> lk(imu_mutex_);
+    imu_buffer_.clear();
+    last_imu_drain_t_ = -1.0;
+  }
+  return CallbackReturn::SUCCESS;
+}
+
+OrbSlam3LifecycleNode::CallbackReturn
+OrbSlam3LifecycleNode::on_shutdown(const rclcpp_lifecycle::State & state)
+{
+  return on_cleanup(state);
+}
+
+rclcpp::QoS OrbSlam3LifecycleNode::sensorQoS() const
+{
+  rclcpp::QoS qos(rclcpp::KeepLast(static_cast<size_t>(std::max(1, qos_depth_))));
+  if (qos_reliability_ == "reliable") {
+    qos.reliable();
+  } else {
+    qos.best_effort();  // matches RealSense / OAK-D / LUCID drivers by default
+  }
+  qos.durability_volatile();
+  return qos;
+}
+
+rmw_qos_profile_t OrbSlam3LifecycleNode::sensorQoSProfile() const
+{
+  return sensorQoS().get_rmw_qos_profile();
+}
+
+cv::Mat OrbSlam3LifecycleNode::toMono(const sensor_msgs::msg::Image::ConstSharedPtr & msg) const
+{
+  // cv_bridge converts bgr8/rgb8/bgra8/rgba8/mono16/mono8 -> mono8 robustly, so
+  // the node is agnostic to whether the driver publishes colour or gray.
+  return cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::MONO8)->image;
+}
+
+cv::Mat OrbSlam3LifecycleNode::toDepth(const sensor_msgs::msg::Image::ConstSharedPtr & msg) const
+{
+  // Keep the native depth encoding (16UC1 mm for RealSense/OAK, or 32FC1 m);
+  // ORB-SLAM3 applies DepthMapFactor from the settings .yaml.
+  return cv_bridge::toCvCopy(msg, msg->encoding)->image;
+}
+
+void OrbSlam3LifecycleNode::pushImu(const sensor_msgs::msg::Imu & imu)
+{
+  const cv::Point3f acc(
+    imu.linear_acceleration.x, imu.linear_acceleration.y, imu.linear_acceleration.z);
+  const cv::Point3f gyr(
+    imu.angular_velocity.x, imu.angular_velocity.y, imu.angular_velocity.z);
+  const double t = rclcpp::Time(imu.header.stamp).seconds();
+  std::lock_guard<std::mutex> lk(imu_mutex_);
+  imu_buffer_.emplace_back(acc, gyr, t);
+}
+
+std::vector<ORB_SLAM3::IMU::Point> OrbSlam3LifecycleNode::drainImu(double t_frame)
+{
+  std::vector<ORB_SLAM3::IMU::Point> out;
+  std::lock_guard<std::mutex> lk(imu_mutex_);
+  while (!imu_buffer_.empty() && imu_buffer_.front().t <= t_frame) {
+    out.push_back(imu_buffer_.front());
+    imu_buffer_.pop_front();
+  }
+  last_imu_drain_t_ = t_frame;
+  return out;
+}
+
+void OrbSlam3LifecycleNode::publishTracking(const Sophus::SE3f & Tcw, const rclcpp::Time & stamp)
+{
+  if (!active_.load() || !slam_) {
+    return;
+  }
+
+  const int state = slam_->GetTrackingState();
+  last_tracking_state_.store(state);
+
+  // rate estimate (single-threaded executor: no lock needed)
+  const rclcpp::Time now = this->now();
+  if (last_track_time_.nanoseconds() > 0) {
+    const double dt = (now - last_track_time_).seconds();
+    if (dt > 1e-6) {
+      track_rate_hz_ = 0.9 * track_rate_hz_ + 0.1 * (1.0 / dt);
+    }
+  }
+  last_track_time_ = now;
+
+  if (state != kOk) {
+    return;  // don't emit TF/pose from a lost/uninitialized state
+  }
+  frames_tracked_.fetch_add(1);
+
+  // System::Track* returns Tcw (world->camera); publish the camera-in-world pose.
+  const Sophus::SE3f Twc = Tcw.inverse();
+
+  if (publish_tf_) {
+    Eigen::Isometry3d iso = Eigen::Isometry3d::Identity();
+    iso.linear() = Twc.rotationMatrix().cast<double>();
+    iso.translation() = Twc.translation().cast<double>();
+    geometry_msgs::msg::TransformStamped tf = tf2::eigenToTransform(iso);
+    tf.header.stamp = stamp;
+    tf.header.frame_id = world_frame_id_;
+    tf.child_frame_id = camera_frame_id_;
+    tf_broadcaster_->sendTransform(tf);
+  }
+
+  if (publish_pose_ || publish_path_) {
+    geometry_msgs::msg::PoseStamped ps;
+    ps.header.stamp = stamp;
+    ps.header.frame_id = world_frame_id_;
+    const Eigen::Vector3f t = Twc.translation();
+    const Eigen::Quaternionf q = Twc.unit_quaternion();
+    ps.pose.position.x = t.x();
+    ps.pose.position.y = t.y();
+    ps.pose.position.z = t.z();
+    ps.pose.orientation.x = q.x();
+    ps.pose.orientation.y = q.y();
+    ps.pose.orientation.z = q.z();
+    ps.pose.orientation.w = q.w();
+    if (publish_pose_) {
+      pose_pub_->publish(ps);
+    }
+    if (publish_path_) {
+      path_.header.stamp = stamp;
+      path_.poses.push_back(ps);
+      path_pub_->publish(path_);
+    }
+  }
+
+  if (publish_pointcloud_ && cloud_pub_->get_subscription_count() > 0) {
+    const std::vector<ORB_SLAM3::MapPoint *> mps = slam_->GetTrackedMapPoints();
+    sensor_msgs::msg::PointCloud2 cloud;
+    cloud.header.stamp = stamp;
+    cloud.header.frame_id = world_frame_id_;
+    cloud.height = 1;
+    cloud.is_dense = false;
+    cloud.is_bigendian = false;
+    sensor_msgs::PointCloud2Modifier mod(cloud);
+    mod.setPointCloud2FieldsByString(1, "xyz");
+    mod.resize(mps.size());
+    sensor_msgs::PointCloud2Iterator<float> ix(cloud, "x"), iy(cloud, "y"), iz(cloud, "z");
+    size_t n = 0;
+    for (ORB_SLAM3::MapPoint * mp : mps) {
+      if (mp == nullptr || mp->isBad()) {continue;}
+      const Eigen::Vector3f p = mp->GetWorldPos();
+      *ix = p.x(); *iy = p.y(); *iz = p.z();
+      ++ix; ++iy; ++iz; ++n;
+    }
+    mod.resize(n);
+    cloud_pub_->publish(cloud);
+  }
+}
+
+void OrbSlam3LifecycleNode::produceDiagnostics(diagnostic_updater::DiagnosticStatusWrapper & stat)
+{
+  const int s = last_tracking_state_.load();
+  const char * name = "UNKNOWN";
+  switch (s) {
+    case -1: name = "SYSTEM_NOT_READY"; break;
+    case 0: name = "NO_IMAGES_YET"; break;
+    case 1: name = "NOT_INITIALIZED"; break;
+    case 2: name = "OK"; break;
+    case 3: name = "RECENTLY_LOST"; break;
+    case 4: name = "LOST"; break;
+  }
+  if (!active_.load()) {
+    stat.summary(diagnostic_msgs::msg::DiagnosticStatus::WARN, "not active");
+  } else if (s == kOk) {
+    stat.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "tracking OK");
+  } else if (s == 3 || s == 1 || s == 0) {
+    stat.summary(diagnostic_msgs::msg::DiagnosticStatus::WARN, name);
+  } else {
+    stat.summary(diagnostic_msgs::msg::DiagnosticStatus::ERROR, name);
+  }
+  stat.add("tracking_state", name);
+  stat.add("frames_tracked", static_cast<int>(frames_tracked_.load()));
+  stat.add("track_rate_hz", track_rate_hz_);
+  stat.add("sensor_type", static_cast<int>(sensor_type_));
+  {
+    std::lock_guard<std::mutex> lk(imu_mutex_);
+    stat.add("imu_buffer", static_cast<int>(imu_buffer_.size()));
+  }
+}
+
+}  // namespace orb_slam3_ros

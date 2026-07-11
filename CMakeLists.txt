@@ -41,6 +41,8 @@ option(ORB_SLAM3_BUILD_EXAMPLES
   "Build the standalone (non-ROS) dataset example executables (EuRoC/KITTI/TUM/...)." OFF)
 option(ORB_SLAM3_INSTALL_VOCABULARY
   "Extract Vocabulary/ORBvoc.txt.tar.gz at build time and install it to share/." ON)
+option(ORB_SLAM3_BUILD_ROS_NODES
+  "Build the ROS 2 wrapper nodes (mono / rgbd / stereo / stereo-inertial)." ON)
 
 # --------------------------------------------------------------- compile flags
 add_compile_definitions(COMPILEDWITHC11)
@@ -224,6 +226,53 @@ if(ORB_SLAM3_BUILD_EXAMPLES)
   orb_slam3_add_example(stereo_inertial_euroc   Stereo-Inertial/stereo_inertial_euroc.cc)
   orb_slam3_add_example(stereo_inertial_tum_vi  Stereo-Inertial/stereo_inertial_tum_vi.cc)
   message(STATUS "[orb_slam3] Building standalone examples (realsense2: ${realsense2_FOUND})")
+endif()
+
+# ---------------------------------------------------- ROS 2 wrapper nodes
+# Built in the same package as the library (colcon does not discover a package
+# nested inside another), so the nodes link the ORB-SLAM3 target directly. The
+# node dependencies do not leak to downstream find_package(orb_slam3) consumers.
+if(ORB_SLAM3_BUILD_ROS_NODES)
+  find_package(rclcpp REQUIRED)
+  find_package(rclcpp_lifecycle REQUIRED)
+  find_package(lifecycle_msgs REQUIRED)
+  find_package(ament_index_cpp REQUIRED)
+  find_package(sensor_msgs REQUIRED)
+  find_package(geometry_msgs REQUIRED)
+  find_package(nav_msgs REQUIRED)
+  find_package(diagnostic_msgs REQUIRED)
+  find_package(diagnostic_updater REQUIRED)
+  find_package(cv_bridge REQUIRED)
+  find_package(message_filters REQUIRED)
+  find_package(tf2 REQUIRED)
+  find_package(tf2_ros REQUIRED)
+  find_package(tf2_eigen REQUIRED)
+  find_package(tf2_geometry_msgs REQUIRED)
+
+  set(_orb_ros_deps
+    rclcpp rclcpp_lifecycle lifecycle_msgs ament_index_cpp
+    sensor_msgs geometry_msgs nav_msgs
+    diagnostic_msgs diagnostic_updater cv_bridge message_filters
+    tf2 tf2_ros tf2_eigen tf2_geometry_msgs)
+
+  add_library(orb_slam3_ros_common SHARED orb_slam3_ros/src/orb_slam3_node.cpp)
+  target_include_directories(orb_slam3_ros_common PUBLIC
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/orb_slam3_ros/include>")
+  target_link_libraries(orb_slam3_ros_common ${PROJECT_NAME} ${OpenCV_LIBS})
+  ament_target_dependencies(orb_slam3_ros_common ${_orb_ros_deps})
+
+  foreach(_node mono_node rgbd_node stereo_node stereo_inertial_node)
+    add_executable(${_node} orb_slam3_ros/src/${_node}.cpp)
+    target_link_libraries(${_node} orb_slam3_ros_common)
+    ament_target_dependencies(${_node} ${_orb_ros_deps})
+    install(TARGETS ${_node} RUNTIME DESTINATION lib/${PROJECT_NAME})
+  endforeach()
+
+  install(TARGETS orb_slam3_ros_common
+    ARCHIVE DESTINATION lib LIBRARY DESTINATION lib RUNTIME DESTINATION bin)
+  install(DIRECTORY orb_slam3_ros/launch orb_slam3_ros/config
+    DESTINATION share/${PROJECT_NAME})
+  message(STATUS "[orb_slam3] Building ROS 2 wrapper nodes (mono/rgbd/stereo/stereo-inertial)")
 endif()
 
 # ----------------------------------------------------------------- lint / test
