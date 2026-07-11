@@ -26,6 +26,10 @@
 #include "Settings.h"
 #ifdef USE_PANGOLIN
 #include<pangolin/pangolin.h>
+#else
+// Headless build: forward-declare the only Pangolin type used in this header's
+// method signatures so the (unused, viewer-only) declarations still parse.
+namespace pangolin { struct OpenGlMatrix; }
 #endif
 
 #include<mutex>
@@ -47,14 +51,10 @@ public:
 
     void DrawMapPoints();
     void DrawKeyFrames(const bool bDrawKF, const bool bDrawGraph, const bool bDrawInertialGraph, const bool bDrawOptLba);
-#ifdef USE_PANGOLIN
     void DrawCurrentCamera(pangolin::OpenGlMatrix &Twc);
-#endif
     void SetCurrentCameraPose(const Sophus::SE3f &Tcw);
     void SetReferenceKeyFrame(KeyFrame *pKF);
-#ifdef USE_PANGOLIN
     void GetCurrentOpenGLCameraMatrix(pangolin::OpenGlMatrix &M, pangolin::OpenGlMatrix &MOw);
-#endif
 
 private:
 

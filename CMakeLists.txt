@@ -116,7 +116,10 @@ set(ORB_SLAM3_SOURCES
 ament_auto_add_library(${PROJECT_NAME} SHARED ${ORB_SLAM3_SOURCES})
 
 if(USE_PANGOLIN)
-  target_compile_definitions(${PROJECT_NAME} PUBLIC USE_PANGOLIN)
+  # PRIVATE: the viewer is an implementation detail of the library's own .cc
+  # files. The public headers are pangolin-agnostic, so downstream consumers
+  # neither need this definition nor a Pangolin installation.
+  target_compile_definitions(${PROJECT_NAME} PRIVATE USE_PANGOLIN)
 endif()
 
 # Public include tree. ORB-SLAM3's public headers #include their vendored deps
@@ -127,9 +130,9 @@ target_include_directories(${PROJECT_NAME} PUBLIC
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/CameraModels>"
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Thirdparty/Sophus>"
-  "$<INSTALL_INTERFACE:include/${PROJECT_NAME}>"
-  "$<INSTALL_INTERFACE:include/${PROJECT_NAME}/CameraModels>"
-  "$<INSTALL_INTERFACE:include/${PROJECT_NAME}/Thirdparty/Sophus>")
+  "$<INSTALL_INTERFACE:include>"
+  "$<INSTALL_INTERFACE:include/CameraModels>"
+  "$<INSTALL_INTERFACE:include/Thirdparty/Sophus>")
 
 target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC
   ${OpenCV_INCLUDE_DIRS}
@@ -150,7 +153,7 @@ endif()
 
 # ------------------------------------------------ install vendored .so + headers
 # ament_auto_package() installs/exports the core library and the include/ tree
-# (to include/${PROJECT_NAME}); we additionally install the vendored libraries
+# (to include); we additionally install the vendored libraries
 # and the Thirdparty headers that the public ORB-SLAM3 headers pull in.
 install(TARGETS DBoW2 g2o
   ARCHIVE DESTINATION lib
@@ -158,15 +161,15 @@ install(TARGETS DBoW2 g2o
   RUNTIME DESTINATION bin)
 
 install(DIRECTORY Thirdparty/DBoW2/DBoW2 Thirdparty/DBoW2/DUtils
-  DESTINATION include/${PROJECT_NAME}/Thirdparty/DBoW2
+  DESTINATION include/Thirdparty/DBoW2
   FILES_MATCHING PATTERN "*.h")
 install(DIRECTORY Thirdparty/g2o/g2o
-  DESTINATION include/${PROJECT_NAME}/Thirdparty/g2o
+  DESTINATION include/Thirdparty/g2o
   FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp")
 install(FILES Thirdparty/g2o/config.h
-  DESTINATION include/${PROJECT_NAME}/Thirdparty/g2o)
+  DESTINATION include/Thirdparty/g2o)
 install(DIRECTORY Thirdparty/Sophus/sophus
-  DESTINATION include/${PROJECT_NAME}/Thirdparty/Sophus
+  DESTINATION include/Thirdparty/Sophus
   FILES_MATCHING PATTERN "*.hpp")
 
 # ------------------------------------------------------------- ORB vocabulary
@@ -186,9 +189,9 @@ endif()
 
 # ------------------------------------------------------------------- exports
 ament_export_include_directories(
-  include/${PROJECT_NAME}
-  include/${PROJECT_NAME}/CameraModels
-  include/${PROJECT_NAME}/Thirdparty/Sophus)
+  include
+  include/CameraModels
+  include/Thirdparty/Sophus)
 ament_export_libraries(DBoW2 g2o)
 ament_export_dependencies(OpenCV Eigen3 Boost OpenSSL)
 if(USE_PANGOLIN)

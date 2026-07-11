@@ -24,9 +24,6 @@
 #include "KeyFrame.h"
 
 #include <set>
-#ifdef USE_PANGOLIN
-#include <pangolin/pangolin.h>   // not used by Map; kept only for the viewer build
-#endif
 #include <mutex>
 
 #include <boost/serialization/base_object.hpp>
@@ -189,8 +186,10 @@ protected:
     int mnBigChangeIdx;
 
 
-    // View of the map in aerial sight (for the AtlasViewer)
-    GLubyte* mThumbnail;
+    // View of the map in aerial sight (for the AtlasViewer). Typed as a raw byte
+    // buffer (GLubyte is just unsigned char) so this public header carries no
+    // OpenGL/Pangolin dependency and stays usable in headless downstream builds.
+    unsigned char* mThumbnail;
 
     bool mIsInUse;
     bool mHasTumbnail;
