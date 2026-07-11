@@ -93,6 +93,35 @@ Any node also runs standalone, e.g.:
 ros2 run orb_slam3 mono_node --ros-args -p settings_file:=/abs/mono.yaml -p image_topic:=/my/image
 ```
 
+## Composable components
+
+Each node is also registered as a `rclcpp_components` component
+(`orb_slam3_ros::MonoNode`, `RgbdNode`, `StereoNode`, `StereoInertialNode`), so
+it can be loaded into a shared process (zero-copy intra-process comms with the
+camera driver when it is composed too):
+```bash
+ros2 run rclcpp_components component_container
+ros2 component load /ComponentManager orb_slam3 orb_slam3_ros::MonoNode \
+  -p settings_file:=/abs/mono.yaml -p image_topic:=/camera/image_raw
+```
+
+## Visualization (RViz) + connecting to your robot
+
+```bash
+ros2 launch orb_slam3 rviz.launch.py                     # opens the bundled config
+```
+The config's *Fixed Frame* is `map` and it shows TF, the camera pose (axes), the
+path, and the map-point cloud (topics default to the mono node — change them for
+rgbd/stereo).
+
+Publish a static transform from your robot body to the camera frame so the SLAM
+`map → camera` chain connects to `base_link` (set the mounting to match your rig;
+`child_frame` MUST equal the node's `camera_frame_id`):
+```bash
+ros2 launch orb_slam3 base_to_camera.launch.py \
+     parent_frame:=base_link child_frame:=camera x:=0.10 z:=0.20 roll:=-1.5708 yaw:=-1.5708
+```
+
 ## Diagnosing "no data"
 
 Ninety percent of "it launched but never tracks" is a **QoS mismatch** or a

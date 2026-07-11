@@ -48,6 +48,7 @@
        which only inherit the library's exported OpenCV/Eigen/Boost/OpenSSL deps. -->
   <depend>rclcpp</depend>
   <depend>rclcpp_lifecycle</depend>
+  <depend>rclcpp_components</depend>
   <depend>lifecycle_msgs</depend>
   <depend>ament_index_cpp</depend>
   <depend>sensor_msgs</depend>

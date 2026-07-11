@@ -73,13 +73,5 @@ private:
 
 }  // namespace orb_slam3_ros
 
-int main(int argc, char ** argv)
-{
-  rclcpp::init(argc, argv);
-  rclcpp::executors::SingleThreadedExecutor exec;
-  auto node = std::make_shared<orb_slam3_ros::RgbdNode>(rclcpp::NodeOptions());
-  exec.add_node(node->get_node_base_interface());
-  exec.spin();
-  rclcpp::shutdown();
-  return 0;
-}
+#include "rclcpp_components/register_node_macro.hpp"
+RCLCPP_COMPONENTS_REGISTER_NODE(orb_slam3_ros::RgbdNode)
