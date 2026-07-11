@@ -1636,6 +1636,7 @@ void Tracking::PreintegrateIMU()
     if(mlQueueImuData.size() == 0)
     {
         Verbose::PrintMess("Not IMU data in mlQueueImuData!!", Verbose::VERBOSITY_NORMAL);
+        mCurrentFrame.mpImuPreintegrated = mpImuPreintegratedFromLastKF;  // avoid a NULL preintegration downstream
         mCurrentFrame.setIntegrated();
         return;
     }
@@ -1677,6 +1678,10 @@ void Tracking::PreintegrateIMU()
     const int n = mvImuFromLastFrame.size()-1;
     if(n==0){
         cout << "Empty IMU measurements vector!!!\n";
+        // Leave a valid (KF-level) preintegration so PredictStateIMU() and the
+        // inertial pose optimizers do not dereference a NULL pointer (issue #730).
+        mCurrentFrame.mpImuPreintegrated = mpImuPreintegratedFromLastKF;
+        mCurrentFrame.setIntegrated();
         return;
     }
 

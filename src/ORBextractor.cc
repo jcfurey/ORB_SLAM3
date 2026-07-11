@@ -555,8 +555,9 @@ namespace ORB_SLAM3
     vector<cv::KeyPoint> ORBextractor::DistributeOctTree(const vector<cv::KeyPoint>& vToDistributeKeys, const int &minX,
                                                          const int &maxX, const int &minY, const int &maxY, const int &N, const int &level)
     {
-        // Compute how many initial nodes
-        const int nIni = round(static_cast<float>(maxX-minX)/(maxY-minY));
+        // Compute how many initial nodes. Clamp to >=1: for portrait/tall regions
+        // (maxY-minY > maxX-minX) the round() is 0, which divides by zero below.
+        const int nIni = std::max(1, static_cast<int>(round(static_cast<float>(maxX-minX)/(maxY-minY))));
 
         const float hX = static_cast<float>(maxX-minX)/nIni;
 
@@ -797,8 +798,10 @@ namespace ORB_SLAM3
             const float width = (maxBorderX-minBorderX);
             const float height = (maxBorderY-minBorderY);
 
-            const int nCols = width/W;
-            const int nRows = height/W;
+            // Clamp to >=1: on the smallest pyramid levels width/height can be < W,
+            // giving nCols/nRows == 0 and a divide-by-zero in the ceil() below.
+            const int nCols = std::max(1, static_cast<int>(width/W));
+            const int nRows = std::max(1, static_cast<int>(height/W));
             const int wCell = ceil(width/nCols);
             const int hCell = ceil(height/nRows);
 

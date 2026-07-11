@@ -792,9 +792,11 @@ float KeyFrame::ComputeSceneMedianDepth(const int q)
     Eigen::Matrix<float,1,3> Rcw2 = Rcw.row(2);
     float zcw = tcw(2);
     for(int i=0; i<N; i++) {
-        if(mvpMapPoints[i])
+        // Read the locked snapshot taken above, not the live shared member, to
+        // avoid a TOCTOU NULL-dereference if another thread erases a match here.
+        if(vpMapPoints[i])
         {
-            MapPoint* pMP = mvpMapPoints[i];
+            MapPoint* pMP = vpMapPoints[i];
             Eigen::Vector3f x3Dw = pMP->GetWorldPos();
             float z = Rcw2.dot(x3Dw) + zcw;
             vDepths.push_back(z);
@@ -803,6 +805,8 @@ float KeyFrame::ComputeSceneMedianDepth(const int q)
 
     sort(vDepths.begin(),vDepths.end());
 
+    if(vDepths.empty())
+        return -1.0f;   // no valid map points: avoid the (size()-1)/q unsigned underflow
     return vDepths[(vDepths.size()-1)/q];
 }
 

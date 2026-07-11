@@ -56,9 +56,25 @@ the upstream reference; the corresponding finding below has the full analysis):
   latent upstream bug — **`MLPnPsolver::~MLPnPsolver()` was declared but never
   defined** — now given its (trivial) definition in `MLPnPsolver.cpp`.
 
-All of the above were verified to compile and link, and the node built on top runs
-on ROS 2 Jazzy. They **do** change tracking/relocalization behaviour (for the
-better, per the references) — validate on your datasets.
+The following crash / undefined-behaviour fixes were also applied (guards only — no
+behaviour change on the happy path):
+
+- **`ORBextractor.cc` `DistributeOctTree`** — clamp `nIni` to ≥1; portrait/tall
+  regions gave `nIni == 0` and a divide-by-zero.
+- **`ORBextractor.cc` cell grid** — clamp `nCols`/`nRows` to ≥1; the smallest pyramid
+  levels gave 0 and a divide-by-zero in `ceil()`.
+- **`MapPoint.cc` `EraseObservation`** — guard `mObservations.begin()` when the map
+  became empty (was dereferencing `begin() == end()`).
+- **`Tracking.cc` `PreintegrateIMU`** — the empty-queue and `n==0` early returns left
+  `mCurrentFrame.mpImuPreintegrated` NULL, later dereferenced by the inertial pose
+  optimizers (segfault, issue #730); now set to the KF-level preintegration.
+- **`KeyFrame.cc` `ComputeSceneMedianDepth`** — read the locked snapshot instead of the
+  live `mvpMapPoints` (TOCTOU NULL-deref) and guard the empty-vector unsigned underflow.
+
+All of the above were verified to compile and link, and the ROS 2 node built on top
+runs on Jazzy. The relocalization/matching changes **do** alter behaviour (for the
+better, per the references) — validate on your datasets; the crash/UB fixes are
+guards with no happy-path change.
 
 
 ## High severity
