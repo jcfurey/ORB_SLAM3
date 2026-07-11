@@ -21,7 +21,9 @@
 #include "System.h"
 #include "Converter.h"
 #include <thread>
+#ifdef USE_PANGOLIN
 #include <pangolin/pangolin.h>
+#endif
 #include <iomanip>
 #include <openssl/md5.h>
 #include <boost/serialization/base_object.hpp>
@@ -226,6 +228,7 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
     //usleep(10*1000*1000);
 
     //Initialize the Viewer thread and launch
+#ifdef USE_PANGOLIN
     if(bUseViewer)
     //if(false) // TODO
     {
@@ -235,6 +238,9 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
         mpLoopCloser->mpViewer = mpViewer;
         mpViewer->both = mpFrameDrawer->both;
     }
+#else
+    (void)bUseViewer;   // headless build: no Pangolin viewer (use RViz instead)
+#endif
 
     // Fix verbosity
     Verbose::SetTh(Verbose::VERBOSITY_QUIET);

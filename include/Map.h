@@ -24,7 +24,9 @@
 #include "KeyFrame.h"
 
 #include <set>
-#include <pangolin/pangolin.h>
+#ifdef USE_PANGOLIN
+#include <pangolin/pangolin.h>   // not used by Map; kept only for the viewer build
+#endif
 #include <mutex>
 
 #include <boost/serialization/base_object.hpp>

@@ -1,0 +1,50 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>orb_slam3</name>
+  <version>1.0.0</version>
+  <description>
+    ORB-SLAM3 V1.0 packaged as a ROS 2 (ament_cmake / ament_cmake_auto) library.
+    Builds the ORB-SLAM3 core shared library together with its vendored
+    Thirdparty dependencies (DBoW2, g2o, Sophus) in a single colcon build and
+    exports the library so downstream ROS 2 nodes can find_package(orb_slam3)
+    and link against it. Tested on ROS 2 Jazzy (Ubuntu 24.04); forward-compatible
+    with Kilted/Rolling. The C++ namespace remains ORB_SLAM3.
+  </description>
+
+  <maintainer email="jcameronfurey@gmail.com">J. Cameron Furey</maintainer>
+  <license>GPL-3.0-only</license>
+  <url type="repository">https://github.com/jcfurey/orb_slam3</url>
+  <url type="website">https://github.com/UZ-SLAMLab/ORB_SLAM3</url>
+  <author>Carlos Campos</author>
+  <author>Richard Elvira</author>
+  <author>Juan J. Gómez Rodríguez</author>
+  <author>José M. M. Montiel</author>
+  <author>Juan D. Tardós</author>
+
+  <!-- Build tooling -->
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_auto</buildtool_depend>
+  <!-- Makes find_package(Eigen3) / ament_export_dependencies(Eigen3) behave under ament -->
+  <buildtool_depend>eigen3_cmake_module</buildtool_depend>
+
+  <!-- System dependencies (resolvable by rosdep). These are NOT auto-found by
+       ament_auto_find_build_dependencies() because their rosdep keys are not
+       CMake package-config names; CMakeLists.txt find_package()es them explicitly. -->
+  <depend>libopencv-dev</depend>
+  <depend>eigen</depend>
+  <depend>libboost-serialization-dev</depend>
+  <depend>libssl-dev</depend>
+
+  <!-- NOTE: Pangolin (the viewer backend) has NO rosdep key and is not packaged
+       for Ubuntu 24.04. It must be built from source (stevenlovegrove/Pangolin),
+       OR build headless with -DUSE_PANGOLIN=OFF (no Pangolin needed at all).
+       See ROS2.md. Do NOT add <depend>Pangolin</depend> — rosdep cannot resolve it. -->
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

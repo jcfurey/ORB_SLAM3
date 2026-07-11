@@ -223,7 +223,13 @@ protected:
     bool mbFixScale;
 
 
-    bool mnFullBAIdx;
+    // Counter of Full-BA requests, used to detect whether the running GBA's
+    // result is stale (a newer Full BA was requested since it started). This
+    // must be an integer index (as in ORB-SLAM2); as a bool it saturated at 1
+    // after the first increment, silently breaking the staleness check at
+    // RunGlobalBundleAdjustment(). Fixing the type also makes it C++17-legal
+    // (bool `operator++` was removed in C++17).
+    int mnFullBAIdx;
 
 
 

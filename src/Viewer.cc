@@ -18,7 +18,9 @@
 
 
 #include "Viewer.h"
+#ifdef USE_PANGOLIN
 #include <pangolin/pangolin.h>
+#endif
 
 #include <mutex>
 
@@ -159,6 +161,7 @@ bool Viewer::ParseViewerParamFile(cv::FileStorage &fSettings)
     return !b_miss_params;
 }
 
+#ifdef USE_PANGOLIN
 void Viewer::Run()
 {
     mbFinished = false;
@@ -382,6 +385,16 @@ void Viewer::Run()
 
     SetFinish();
 }
+#else   // USE_PANGOLIN
+void Viewer::Run()
+{
+    // Headless build: the Pangolin viewer is compiled out. If a viewer thread is
+    // started in this configuration it simply marks itself finished immediately.
+    mbFinished = false;
+    mbStopped = false;
+    SetFinish();
+}
+#endif  // USE_PANGOLIN
 
 void Viewer::RequestFinish()
 {
