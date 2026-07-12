@@ -189,6 +189,16 @@ private:
 public:
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
+    // Marginal covariance of the pose after motion-only bundle adjustment
+    // (Optimizer::PoseOptimization). Expressed in g2o's SE3 tangent ordering
+    // [omega(rotation); upsilon(translation)] as a left-perturbation of Tcw
+    // (world->camera). mbHasPoseCovariance is false when tracking was too weak
+    // or ill-conditioned to form it. The ROS wrapper transforms this into the
+    // published world-frame pose covariance; consumers that only need the pose
+    // can ignore it.
+    Eigen::Matrix<double,6,6> mPoseCovariance = Eigen::Matrix<double,6,6>::Zero();
+    bool mbHasPoseCovariance = false;
+
     // Vocabulary used for relocalization.
     ORBVocabulary* mpORBvocabulary;
 

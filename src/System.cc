@@ -327,6 +327,10 @@ Sophus::SE3f System::TrackStereo(const cv::Mat &imLeft, const cv::Mat &imRight, 
     mTrackingState = mpTracker->mState;
     mTrackedMapPoints = mpTracker->mCurrentFrame.mvpMapPoints;
     mTrackedKeyPointsUn = mpTracker->mCurrentFrame.mvKeysUn;
+    mTrackedInliers = mpTracker->GetMatchesInliers();
+    mbTrackedPoseCovarianceValid = mpTracker->mCurrentFrame.mbHasPoseCovariance;
+    if(mbTrackedPoseCovarianceValid)
+        mTrackedPoseCovariance = mpTracker->mCurrentFrame.mPoseCovariance;
 
     return Tcw;
 }
@@ -399,6 +403,10 @@ Sophus::SE3f System::TrackRGBD(const cv::Mat &im, const cv::Mat &depthmap, const
     mTrackingState = mpTracker->mState;
     mTrackedMapPoints = mpTracker->mCurrentFrame.mvpMapPoints;
     mTrackedKeyPointsUn = mpTracker->mCurrentFrame.mvKeysUn;
+    mTrackedInliers = mpTracker->GetMatchesInliers();
+    mbTrackedPoseCovarianceValid = mpTracker->mCurrentFrame.mbHasPoseCovariance;
+    if(mbTrackedPoseCovarianceValid)
+        mTrackedPoseCovariance = mpTracker->mCurrentFrame.mPoseCovariance;
     return Tcw;
 }
 
@@ -475,6 +483,10 @@ Sophus::SE3f System::TrackMonocular(const cv::Mat &im, const double &timestamp, 
     mTrackingState = mpTracker->mState;
     mTrackedMapPoints = mpTracker->mCurrentFrame.mvpMapPoints;
     mTrackedKeyPointsUn = mpTracker->mCurrentFrame.mvKeysUn;
+    mTrackedInliers = mpTracker->GetMatchesInliers();
+    mbTrackedPoseCovarianceValid = mpTracker->mCurrentFrame.mbHasPoseCovariance;
+    if(mbTrackedPoseCovarianceValid)
+        mTrackedPoseCovariance = mpTracker->mCurrentFrame.mPoseCovariance;
 
     return Tcw;
 }
@@ -1335,6 +1347,19 @@ vector<cv::KeyPoint> System::GetTrackedKeyPointsUn()
 {
     unique_lock<mutex> lock(mMutexState);
     return mTrackedKeyPointsUn;
+}
+
+int System::GetTrackedInliers()
+{
+    unique_lock<mutex> lock(mMutexState);
+    return mTrackedInliers;
+}
+
+Eigen::Matrix<double,6,6> System::GetTrackedPoseCovariance(bool& bValid)
+{
+    unique_lock<mutex> lock(mMutexState);
+    bValid = mbTrackedPoseCovarianceValid;
+    return mTrackedPoseCovariance;
 }
 
 double System::GetTimeFromIMUInit()

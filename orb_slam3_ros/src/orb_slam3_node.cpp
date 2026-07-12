@@ -1,5 +1,7 @@
 #include "orb_slam3_ros/orb_slam3_node.hpp"
 
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <stdexcept>
 #include <string>
@@ -50,12 +52,37 @@ OrbSlam3LifecycleNode::OrbSlam3LifecycleNode(
   declare_parameter<bool>("use_pangolin_viewer", false);
   declare_parameter<std::string>("world_frame_id", "map");
   declare_parameter<std::string>("camera_frame_id", "camera");
+  // Child frame stamped on ~/odom; empty -> reuse camera_frame_id.
+  declare_parameter<std::string>("odom_child_frame_id", "");
   declare_parameter<std::string>("qos_reliability", "sensor_data");  // "sensor_data"|"reliable"
   declare_parameter<int>("qos_depth", 5);
   declare_parameter<bool>("publish_tf", true);
   declare_parameter<bool>("publish_pose", true);
+  declare_parameter<bool>("publish_odom", true);  // nav_msgs/Odometry (pose + covariance) for fusion
   declare_parameter<bool>("publish_path", true);
   declare_parameter<bool>("publish_pointcloud", true);
+
+  // Covariance model for ~/odom. "quality" (default) scales the base diagonal up
+  // as tracking degrades; "static" emits the base diagonal unchanged; "g2o" uses
+  // the true SE3 marginal from ORB-SLAM3's motion-only BA (falls back to quality
+  // when the estimator reports none, e.g. IMU-dominated frames).
+  declare_parameter<std::string>("covariance_mode", "quality");
+  // Best-case (well-tracked) variance on [x, y, z, roll, pitch, yaw] (m^2, rad^2).
+  declare_parameter<std::vector<double>>(
+    "pose_covariance_diagonal", {0.01, 0.01, 0.01, 0.0025, 0.0025, 0.0025});
+  // quality mode: inlier count at which the scale is ~1; scale = ref/inliers.
+  declare_parameter<int>("covariance_inlier_ref", 100);
+  // quality mode: clamp on the per-axis sigma scale (variance scales by its square).
+  declare_parameter<double>("covariance_max_scale", 10.0);
+  // quality mode: extra sigma multiplier while tracking state is RECENTLY_LOST.
+  declare_parameter<double>("covariance_recently_lost_scale", 5.0);
+  // g2o mode: empirical variance multiplier (the raw reprojection marginal is
+  // optimistic; >1 de-weights VO in the fusion). Applied after the frame transform.
+  declare_parameter<double>("covariance_g2o_scale", 1.0);
+  // g2o mode: include the SE3 adjoint lever-arm term (true = full world-frame
+  // marginal; false = body-frame covariance with axes rotated into the world).
+  declare_parameter<bool>("covariance_g2o_lever_arm", true);
+
   autostart_ = declare_parameter<bool>("autostart", true);
 
   if (autostart_) {
@@ -88,12 +115,44 @@ OrbSlam3LifecycleNode::on_configure(const rclcpp_lifecycle::State &)
   use_viewer_ = get_parameter("use_pangolin_viewer").as_bool();
   world_frame_id_ = get_parameter("world_frame_id").as_string();
   camera_frame_id_ = get_parameter("camera_frame_id").as_string();
+  odom_child_frame_id_ = get_parameter("odom_child_frame_id").as_string();
+  if (odom_child_frame_id_.empty()) {
+    odom_child_frame_id_ = camera_frame_id_;
+  }
   qos_reliability_ = get_parameter("qos_reliability").as_string();
   qos_depth_ = get_parameter("qos_depth").as_int();
   publish_tf_ = get_parameter("publish_tf").as_bool();
   publish_pose_ = get_parameter("publish_pose").as_bool();
+  publish_odom_ = get_parameter("publish_odom").as_bool();
   publish_path_ = get_parameter("publish_path").as_bool();
   publish_pointcloud_ = get_parameter("publish_pointcloud").as_bool();
+
+  const std::string cov_mode = get_parameter("covariance_mode").as_string();
+  if (cov_mode == "static") {
+    covariance_mode_ = CovarianceMode::kStatic;
+  } else if (cov_mode == "g2o") {
+    covariance_mode_ = CovarianceMode::kG2o;
+  } else {
+    if (cov_mode != "quality") {
+      RCLCPP_WARN(get_logger(),
+        "covariance_mode '%s' unknown; using 'quality'", cov_mode.c_str());
+    }
+    covariance_mode_ = CovarianceMode::kQuality;
+  }
+  {
+    const std::vector<double> d = get_parameter("pose_covariance_diagonal").as_double_array();
+    if (d.size() == 6) {
+      for (size_t i = 0; i < 6; ++i) {pose_cov_diagonal_[i] = d[i];}
+    } else {
+      RCLCPP_WARN(get_logger(),
+        "pose_covariance_diagonal must have 6 elements (got %zu); using defaults", d.size());
+    }
+  }
+  cov_inlier_ref_ = std::max<int>(1, get_parameter("covariance_inlier_ref").as_int());
+  cov_max_scale_ = std::max(1.0, get_parameter("covariance_max_scale").as_double());
+  cov_recently_lost_scale_ = std::max(1.0, get_parameter("covariance_recently_lost_scale").as_double());
+  cov_g2o_scale_ = std::max(1e-9, get_parameter("covariance_g2o_scale").as_double());
+  cov_g2o_lever_arm_ = get_parameter("covariance_g2o_lever_arm").as_bool();
 
   if (settings_file_.empty()) {
     RCLCPP_ERROR(get_logger(), "Parameter 'settings_file' (ORB-SLAM3 .yaml) is required.");
@@ -115,6 +174,7 @@ OrbSlam3LifecycleNode::on_configure(const rclcpp_lifecycle::State &)
   }
 
   pose_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("~/pose", rclcpp::QoS(10));
+  odom_pub_ = create_publisher<nav_msgs::msg::Odometry>("~/odom", rclcpp::QoS(10));
   path_pub_ = create_publisher<nav_msgs::msg::Path>("~/path", rclcpp::QoS(10));
   cloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>("~/map_points", rclcpp::QoS(1));
   tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
@@ -132,6 +192,7 @@ OrbSlam3LifecycleNode::CallbackReturn
 OrbSlam3LifecycleNode::on_activate(const rclcpp_lifecycle::State &)
 {
   pose_pub_->on_activate();
+  odom_pub_->on_activate();
   path_pub_->on_activate();
   cloud_pub_->on_activate();
   createSubscriptions();
@@ -146,6 +207,7 @@ OrbSlam3LifecycleNode::on_deactivate(const rclcpp_lifecycle::State &)
   active_.store(false);
   destroySubscriptions();
   pose_pub_->on_deactivate();
+  odom_pub_->on_deactivate();
   path_pub_->on_deactivate();
   cloud_pub_->on_deactivate();
   RCLCPP_INFO(get_logger(), "deactivated");
@@ -159,6 +221,7 @@ OrbSlam3LifecycleNode::on_cleanup(const rclcpp_lifecycle::State &)
   diag_.reset();
   tf_broadcaster_.reset();
   pose_pub_.reset();
+  odom_pub_.reset();
   path_pub_.reset();
   cloud_pub_.reset();
   if (slam_) {
@@ -266,7 +329,7 @@ void OrbSlam3LifecycleNode::publishTracking(const Sophus::SE3f & Tcw, const rclc
     tf_broadcaster_->sendTransform(tf);
   }
 
-  if (publish_pose_ || publish_path_) {
+  if (publish_pose_ || publish_path_ || publish_odom_) {
     geometry_msgs::msg::PoseStamped ps;
     ps.header.stamp = stamp;
     ps.header.frame_id = world_frame_id_;
@@ -286,6 +349,17 @@ void OrbSlam3LifecycleNode::publishTracking(const Sophus::SE3f & Tcw, const rclc
       path_.header.stamp = stamp;
       path_.poses.push_back(ps);
       path_pub_->publish(path_);
+    }
+    if (publish_odom_) {
+      nav_msgs::msg::Odometry odom;
+      odom.header = ps.header;                 // world_frame_id_ + source-image stamp
+      odom.child_frame_id = odom_child_frame_id_;
+      odom.pose.pose = ps.pose;
+      odom.pose.covariance = computePoseCovariance(Twc);
+      // ORB-SLAM3 has no velocity estimate in non-inertial modes; leave twist zero
+      // and flag it unknown (large variance) so a fusion filter ignores it.
+      for (size_t i = 0; i < 6; ++i) {odom.twist.covariance[i * 6 + i] = 1e6;}
+      odom_pub_->publish(odom);
     }
   }
 
@@ -313,6 +387,67 @@ void OrbSlam3LifecycleNode::publishTracking(const Sophus::SE3f & Tcw, const rclc
   }
 }
 
+std::array<double, 36> OrbSlam3LifecycleNode::computePoseCovariance(const Sophus::SE3f & Twc)
+{
+  std::array<double, 36> cov{};  // zero-initialized row-major 6x6
+
+  if (covariance_mode_ == CovarianceMode::kG2o) {
+    bool valid = false;
+    const Eigen::Matrix<double, 6, 6> Sigma_cw = slam_->GetTrackedPoseCovariance(valid);
+    if (valid) {
+      // Sigma_cw = covariance of a left-perturbation of Tcw, in g2o's SE3 tangent
+      // ordering [omega(rot); upsilon(trans)]. A left-pert of Tcw is a body(right)
+      // pert of Twc (same covariance), so map it to a world(left) pert of Twc with
+      // the SE3 adjoint of Twc:  Ad = [[R, 0], [ [t]x R, R ]] (rotation-first),
+      // then reorder to ROS [trans, rot] and apply the empirical scale.
+      const Eigen::Matrix3d R = Twc.rotationMatrix().cast<double>();
+      const Eigen::Vector3d p = Twc.translation().cast<double>();
+      Eigen::Matrix<double, 6, 6> Ad = Eigen::Matrix<double, 6, 6>::Zero();
+      Ad.topLeftCorner<3, 3>() = R;
+      Ad.bottomRightCorner<3, 3>() = R;
+      if (cov_g2o_lever_arm_) {
+        Eigen::Matrix3d tx;
+        tx <<      0.0, -p.z(),  p.y(),
+              p.z(),      0.0, -p.x(),
+             -p.y(),  p.x(),      0.0;
+        Ad.bottomLeftCorner<3, 3>() = tx * R;   // lever-arm coupling rot -> trans
+      }
+      const Eigen::Matrix<double, 6, 6> Sw = Ad * Sigma_cw * Ad.transpose();  // [rot,trans]
+      Eigen::Matrix<double, 6, 6> Sr;                                          // ROS [trans,rot]
+      Sr.topLeftCorner<3, 3>() = Sw.bottomRightCorner<3, 3>();      // trans-trans
+      Sr.bottomRightCorner<3, 3>() = Sw.topLeftCorner<3, 3>();      // rot-rot
+      Sr.topRightCorner<3, 3>() = Sw.bottomLeftCorner<3, 3>();      // trans-rot
+      Sr.bottomLeftCorner<3, 3>() = Sw.topRightCorner<3, 3>();      // rot-trans
+      Sr *= cov_g2o_scale_;
+      for (int r = 0; r < 6; ++r) {
+        for (int c = 0; c < 6; ++c) {cov[r * 6 + c] = Sr(r, c);}
+      }
+      last_cov_scale_ = 1.0;  // scale is carried inside the marginal
+      return cov;
+    }
+    // no marginal this frame (e.g. IMU-dominated) -> fall through to quality
+  }
+
+  // static / quality (and g2o fallback): diagonal from the base variances.
+  double scale = 1.0;  // multiplies sigma; variance scales by scale^2
+  if (covariance_mode_ != CovarianceMode::kStatic) {
+    const int inliers = slam_->GetTrackedInliers();
+    const double ratio = static_cast<double>(cov_inlier_ref_) / std::max(1, inliers);
+    scale = std::clamp(ratio, 1.0, cov_max_scale_);
+    // Only reached if ~/odom is ever emitted outside OK tracking; harmless today
+    // (publishTracking returns early unless state == OK) but keeps intent explicit.
+    if (last_tracking_state_.load() == 3 /* RECENTLY_LOST */) {
+      scale *= cov_recently_lost_scale_;
+    }
+  }
+  last_cov_scale_ = scale;
+  const double var_scale = scale * scale;
+  for (size_t i = 0; i < 6; ++i) {
+    cov[i * 6 + i] = pose_cov_diagonal_[i] * var_scale;
+  }
+  return cov;
+}
+
 void OrbSlam3LifecycleNode::produceDiagnostics(diagnostic_updater::DiagnosticStatusWrapper & stat)
 {
   const int s = last_tracking_state_.load();
@@ -338,6 +473,14 @@ void OrbSlam3LifecycleNode::produceDiagnostics(diagnostic_updater::DiagnosticSta
   stat.add("frames_tracked", static_cast<int>(frames_tracked_.load()));
   stat.add("track_rate_hz", track_rate_hz_);
   stat.add("sensor_type", static_cast<int>(sensor_type_));
+  if (slam_) {
+    stat.add("track_inliers", slam_->GetTrackedInliers());
+  }
+  const char * cov_name = "quality";
+  if (covariance_mode_ == CovarianceMode::kStatic) {cov_name = "static";}
+  else if (covariance_mode_ == CovarianceMode::kG2o) {cov_name = "g2o";}
+  stat.add("covariance_mode", cov_name);
+  stat.add("covariance_scale", last_cov_scale_);
   {
     std::lock_guard<std::mutex> lk(imu_mutex_);
     stat.add("imu_buffer", static_cast<int>(imu_buffer_.size()));

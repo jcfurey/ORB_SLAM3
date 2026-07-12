@@ -27,6 +27,7 @@
 #include<string>
 #include<thread>
 #include<opencv2/core/core.hpp>
+#include <Eigen/Core>
 
 #include "Tracking.h"
 #include "FrameDrawer.h"
@@ -177,6 +178,17 @@ public:
     std::vector<MapPoint*> GetTrackedMapPoints();
     std::vector<cv::KeyPoint> GetTrackedKeyPointsUn();
 
+    // Number of inlier map-point matches in the last tracked frame -- a
+    // tracking-quality proxy (higher == better-constrained pose).
+    int GetTrackedInliers();
+
+    // Marginal covariance of the last optimized pose, in g2o's SE3 tangent
+    // ordering [omega(rotation); upsilon(translation)] as a left-perturbation of
+    // Tcw (world->camera). bValid is set false when the last frame produced no
+    // covariance (weak/ill-conditioned tracking, or IMU-dominated frames whose
+    // pose did not come from visual PoseOptimization).
+    Eigen::Matrix<double,6,6> GetTrackedPoseCovariance(bool& bValid);
+
     // For debugging
     double GetTimeFromIMUInit();
     bool isLost();
@@ -253,6 +265,9 @@ private:
     int mTrackingState;
     std::vector<MapPoint*> mTrackedMapPoints;
     std::vector<cv::KeyPoint> mTrackedKeyPointsUn;
+    int mTrackedInliers = 0;
+    Eigen::Matrix<double,6,6> mTrackedPoseCovariance = Eigen::Matrix<double,6,6>::Zero();
+    bool mbTrackedPoseCovarianceValid = false;
     std::mutex mMutexState;
 
     //

@@ -13,6 +13,7 @@
 #ifndef ORB_SLAM3_ROS__ORB_SLAM3_NODE_HPP_
 #define ORB_SLAM3_ROS__ORB_SLAM3_NODE_HPP_
 
+#include <array>
 #include <deque>
 #include <memory>
 #include <mutex>
@@ -23,6 +24,7 @@
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 #include <rclcpp_lifecycle/lifecycle_publisher.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <nav_msgs/msg/odometry.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/imu.hpp>
@@ -83,22 +85,47 @@ protected:
 private:
   void produceDiagnostics(diagnostic_updater::DiagnosticStatusWrapper & stat);
 
+  // How the published pose covariance is derived.
+  enum class CovarianceMode
+  {
+    kStatic,   // fixed diagonal from pose_covariance_diagonal
+    kQuality,  // pose_covariance_diagonal scaled up as tracking degrades (default)
+    kG2o,      // true SE3 marginal from ORB-SLAM3's motion-only BA (opt-in),
+               // falling back to kQuality when the estimator reports none
+  };
+  // Fill a row-major 6x6 covariance (nav_msgs order [x y z roll pitch yaw]) for
+  // the world-frame pose Twc, per covariance_mode_ and the current tracking health.
+  std::array<double, 36> computePoseCovariance(const Sophus::SE3f & Twc);
+
   // parameters
   std::string voc_file_;
   std::string settings_file_;
   std::string world_frame_id_;
   std::string camera_frame_id_;
+  std::string odom_child_frame_id_;
   std::string qos_reliability_;
   int qos_depth_{5};
   bool use_viewer_{false};
   bool publish_tf_{true};
   bool publish_pose_{true};
+  bool publish_odom_{true};
   bool publish_path_{true};
   bool publish_pointcloud_{true};
   bool autostart_{true};
 
+  // covariance model
+  CovarianceMode covariance_mode_{CovarianceMode::kQuality};
+  std::array<double, 6> pose_cov_diagonal_{{0.01, 0.01, 0.01, 0.0025, 0.0025, 0.0025}};
+  int cov_inlier_ref_{100};
+  double cov_max_scale_{10.0};
+  double cov_recently_lost_scale_{5.0};
+  double cov_g2o_scale_{1.0};
+  bool cov_g2o_lever_arm_{true};
+  double last_cov_scale_{1.0};  // diagnostics: last quality scale applied
+
   // publishers / tf / diagnostics
   rclcpp_lifecycle::LifecyclePublisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_pub_;
+  rclcpp_lifecycle::LifecyclePublisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
   rclcpp_lifecycle::LifecyclePublisher<nav_msgs::msg::Path>::SharedPtr path_pub_;
   rclcpp_lifecycle::LifecyclePublisher<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_pub_;
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;

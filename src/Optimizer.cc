@@ -1110,6 +1110,63 @@ int Optimizer::PoseOptimization(Frame *pFrame)
             SE3quat_recov.translation().cast<float>());
     pFrame->SetPose(pose);
 
+    // Marginal covariance of the optimized pose (Laplace approximation):
+    // Sigma = H^-1 with the 6x6 information H = sum_i J_i^T Omega_i J_i over the
+    // INLIER (level-0) reprojection edges, evaluated at the final estimate. This
+    // is exact for motion-only BA -- the pose is the only optimizable vertex, so
+    // no Schur marginalization is needed. computeMarginals() is unusable in this
+    // vendored g2o (no linear solver implements solvePattern), hence the direct
+    // accumulation. Kept in g2o's SE3 tangent ordering [omega(rot); upsilon(trans)]
+    // as a left-perturbation of Tcw; the ROS wrapper does the frame transform.
+    // Robust kernels are cleared after it==2 above, so inlier residuals here carry
+    // unit weight, matching this un-robustified information sum.
+    {
+        Eigen::Matrix<double,6,6> H = Eigen::Matrix<double,6,6>::Zero();
+        for(size_t i=0, iend=vpEdgesMono.size(); i<iend; i++)
+        {
+            ORB_SLAM3::EdgeSE3ProjectXYZOnlyPose* e = vpEdgesMono[i];
+            if(e->level()!=0) continue;
+            e->computeError();
+            e->linearizeOplus();
+            H.noalias() += e->jacobianOplusXi().transpose() * e->information() * e->jacobianOplusXi();
+        }
+        for(size_t i=0, iend=vpEdgesMono_FHR.size(); i<iend; i++)
+        {
+            ORB_SLAM3::EdgeSE3ProjectXYZOnlyPoseToBody* e = vpEdgesMono_FHR[i];
+            if(e->level()!=0) continue;
+            e->computeError();
+            e->linearizeOplus();
+            H.noalias() += e->jacobianOplusXi().transpose() * e->information() * e->jacobianOplusXi();
+        }
+        for(size_t i=0, iend=vpEdgesStereo.size(); i<iend; i++)
+        {
+            g2o::EdgeStereoSE3ProjectXYZOnlyPose* e = vpEdgesStereo[i];
+            if(e->level()!=0) continue;
+            e->computeError();
+            e->linearizeOplus();
+            H.noalias() += e->jacobianOplusXi().transpose() * e->information() * e->jacobianOplusXi();
+        }
+        H = (0.5*(H + H.transpose())).eval();  // symmetrize away round-off
+        Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double,6,6>> es(H);
+        const double lambda_min = es.eigenvalues()(0);
+        const double lambda_max = es.eigenvalues()(5);
+        // Need all 6 DoF observable and a well-conditioned H before inverting.
+        if((nInitialCorrespondences-nBad) >= 6 && es.info()==Eigen::Success &&
+           lambda_min > 1e-9 * std::max(lambda_max, 1.0))
+        {
+            // Sigma = V diag(1/lambda) V^T -- reuses the decomposition, numerically
+            // cleaner than a direct 6x6 inverse of a near-singular H.
+            pFrame->mPoseCovariance =
+                es.eigenvectors() * es.eigenvalues().cwiseInverse().asDiagonal() *
+                es.eigenvectors().transpose();
+            pFrame->mbHasPoseCovariance = true;
+        }
+        else
+        {
+            pFrame->mbHasPoseCovariance = false;
+        }
+    }
+
     return nInitialCorrespondences-nBad;
 }
 
