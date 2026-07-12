@@ -2838,12 +2838,12 @@ void Optimizer::LocalInertialBA(KeyFrame *pKF, bool *pbStopFlag, Map *pMap, int&
     }
 
     optimizer.initializeOptimization();
+    if(pbStopFlag)
+        optimizer.setForceStopFlag(pbStopFlag);   // set BEFORE optimize() so it can actually abort
     optimizer.computeActiveErrors();
     float err = optimizer.activeRobustChi2();
     optimizer.optimize(opt_it); // Originally to 2
     float err_end = optimizer.activeRobustChi2();
-    if(pbStopFlag)
-        optimizer.setForceStopFlag(pbStopFlag);
 
     vector<pair<KeyFrame*,MapPoint*> > vToErase;
     vToErase.reserve(vpEdgesMono.size()+vpEdgesStereo.size());

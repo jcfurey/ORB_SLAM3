@@ -203,7 +203,7 @@ void ImuCamPose::Update(const double *pu)
     its++;
     if(its>=3)
     {
-        NormalizeRotation(Rwb);
+        Rwb = NormalizeRotation(Rwb);   // NormalizeRotation returns by value; must be assigned back
         its=0;
     }
 
@@ -240,7 +240,7 @@ void ImuCamPose::UpdateW(const double *pu)
         DR(1,2) = 0.0;
         DR(2,0) = 0.0;
         DR(2,1) = 0.0;
-        NormalizeRotation(DR);
+        DR = NormalizeRotation(DR);   // NormalizeRotation returns by value; must be assigned back
         its = 0;
     }
 
@@ -274,6 +274,10 @@ bool VertexPose::read(std::istream& is)
     std::vector<Eigen::Matrix<double,3,1> > tbc;
 
     const int num_cams = _estimate.Rbc.size();
+    Rcw.resize(num_cams);   // these were indexed below without ever being sized (OOB/UB)
+    tcw.resize(num_cams);
+    Rbc.resize(num_cams);
+    tbc.resize(num_cams);
     for(int idx = 0; idx<num_cams; idx++)
     {
         for (int i=0; i<3; i++){

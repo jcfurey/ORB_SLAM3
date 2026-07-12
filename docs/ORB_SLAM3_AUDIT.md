@@ -71,10 +71,27 @@ behaviour change on the happy path):
 - **`KeyFrame.cc` `ComputeSceneMedianDepth`** — read the locked snapshot instead of the
   live `mvpMapPoints` (TOCTOU NULL-deref) and guard the empty-vector unsigned underflow.
 
+The following numerical / correctness / leak fixes were also applied:
+
+- **`KannalaBrandt8.cpp` `project(Vector3d)`** — use `atan2`/`sqrt` (were `atan2f`/`sqrtf`)
+  so the double-precision fisheye projection matches its analytic Jacobian.
+- **`G2oTypes.cc` `ImuCamPose::Update`/`UpdateW`** — `NormalizeRotation()` returns by
+  value; its result was discarded, so the periodic re-orthonormalization was a no-op.
+  Now assigned back (`Rwb = ...`, `DR = ...`).
+- **`G2oTypes.cc` `VertexPose::read`** — resize the local `Rcw/tcw/Rbc/tbc` vectors before
+  indexing them (were indexed while empty — OOB/UB on graph deserialization).
+- **`Sim3Solver.cc` `ComputeSim3`** — guard the quaternion imaginary-part normalization
+  against a near-zero norm (near-identity rotation) that produced a NaN rotation.
+- **`Optimizer.cc` `LocalInertialBA`** — register the force-stop flag *before* `optimize()`
+  so the local inertial BA can actually be aborted mid-run.
+- **`Tracking.cc` post-relocalization** — removed a dead block that allocated a Frame +
+  prev Frame + Preintegrated "for IMU reset" and leaked all three every frame in the
+  reset window (the consumer, `ResetFrameIMU()`, is an unimplemented stub).
+
 All of the above were verified to compile and link, and the ROS 2 node built on top
-runs on Jazzy. The relocalization/matching changes **do** alter behaviour (for the
-better, per the references) — validate on your datasets; the crash/UB fixes are
-guards with no happy-path change.
+runs on Jazzy. The relocalization/matching/optimization changes **do** alter behaviour
+(for the better, per the references) — validate on your datasets; the crash/UB/leak
+fixes are guards or dead-code removals with no happy-path change.
 
 
 ## High severity

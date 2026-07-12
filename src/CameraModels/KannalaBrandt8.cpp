@@ -45,8 +45,8 @@ namespace ORB_SLAM3 {
 
     Eigen::Vector2d KannalaBrandt8::project(const Eigen::Vector3d &v3D) {
         const double x2_plus_y2 = v3D[0] * v3D[0] + v3D[1] * v3D[1];
-        const double theta = atan2f(sqrtf(x2_plus_y2), v3D[2]);
-        const double psi = atan2f(v3D[1], v3D[0]);
+        const double theta = atan2(sqrt(x2_plus_y2), v3D[2]);
+        const double psi = atan2(v3D[1], v3D[0]);
 
         const double theta2 = theta * theta;
         const double theta3 = theta * theta2;
