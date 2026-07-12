@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-#include <cv_bridge/cv_bridge.hpp>
+#include "orb_slam3_ros/distro_compat.hpp"
 #include "orb_slam3_ros/mf_compat.hpp"
 
 namespace orb_slam3_ros

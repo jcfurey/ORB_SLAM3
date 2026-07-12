@@ -125,7 +125,26 @@ vendored `Thirdparty/…` headers that ORB-SLAM3's public headers pull in) and t
 
 ---
 
-## 4. What changed vs. upstream ORB-SLAM3
+## 4. Distro compatibility (Humble / Jazzy / Lyrical)
+
+The package targets the full ROS 2 LTS suite. Two APIs differ across it and are
+shimmed; everything else was audited against the per-distro upstream branches
+and is compatible unmodified:
+
+| API | Humble | Jazzy | Lyrical | Handling |
+| --- | --- | --- | --- | --- |
+| `message_filters` Subscriber/QoS API | 4.x legacy | 4.x legacy | ≥6 modern | `mf_compat.hpp`, gated by `message_filters_VERSION` in CMake (`<6` → legacy) |
+| `cv_bridge` header name | `.h` only | `.hpp` | `.hpp` | `distro_compat.hpp` (`__has_include`) |
+| `tf2_eigen.hpp`, sensor_msgs `*.hpp`, `diagnostic_updater.hpp` | ✓ | ✓ | ✓ | none needed |
+| `${pkg}_TARGETS` CMake vars (replacement for the removed `ament_target_dependencies`) | ✓ | ✓ | ✓ | none needed |
+| Lifecycle `configure()`/`activate()`, `diagnostic_updater::Updater(node)`, lifecycle components via `rclcpp_components` | ✓ | ✓ | ✓ | none needed |
+
+Verified by building on Jazzy (this repo's CI reference) and on a Lyrical host;
+Humble compatibility is by API audit of the `humble` branches (message_filters,
+vision_opencv, geometry2, ament_cmake, rclcpp, diagnostics, common_interfaces) —
+if you build on Humble and hit anything, please open an issue.
+
+## 5. What changed vs. upstream ORB-SLAM3
 
 - **`CMakeLists.txt`** rewritten as an `ament_cmake` / `ament_cmake_auto` package
   that builds DBoW2 + g2o in-tree (`add_subdirectory`), links Sophus as a

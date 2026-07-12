@@ -8,7 +8,7 @@
 #include <vector>
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
-#include <cv_bridge/cv_bridge.hpp>
+#include "orb_slam3_ros/distro_compat.hpp"
 #include <diagnostic_msgs/msg/diagnostic_status.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <lifecycle_msgs/msg/state.hpp>
