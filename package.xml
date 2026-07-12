@@ -38,10 +38,18 @@
   <depend>libboost-serialization-dev</depend>
   <depend>libssl-dev</depend>
 
-  <!-- NOTE: Pangolin (the viewer backend) has NO rosdep key and is not packaged
-       for Ubuntu 24.04. It must be built from source (stevenlovegrove/Pangolin),
-       OR build headless with -DUSE_PANGOLIN=OFF (no Pangolin needed at all).
-       See ROS2.md. Do NOT add <depend>Pangolin</depend> — rosdep cannot resolve it. -->
+  <!-- Pangolin (the viewer backend) is built when USE_PANGOLIN=ON (the default).
+       It has NO rosdep key and is not packaged for Ubuntu 24.04, so it is vendored
+       as an in-workspace colcon package: src/Pangolin, package name "pangolin"
+       (lowercase), from stevenlovegrove/Pangolin. Depending on it here makes colcon
+       build that package BEFORE orb_slam3 — find_package(Pangolin REQUIRED) needs its
+       installed PangolinConfig.cmake — and, via ament_export_dependencies(Pangolin),
+       propagates it to downstream find_package(orb_slam3) consumers.
+       The key is the lowercase colcon package name "pangolin", NOT the CMake config
+       name "Pangolin": rosdep ignores it because it lives in the workspace src/ tree.
+       For a headless build (USE_PANGOLIN=OFF) the src/Pangolin package is unused.
+       See ROS2.md. -->
+  <depend>pangolin</depend>
 
   <!-- ROS 2 wrapper nodes (orb_slam3_ros/); built when ORB_SLAM3_BUILD_ROS_NODES=ON
        (the default). These do not affect downstream find_package(orb_slam3) consumers,
