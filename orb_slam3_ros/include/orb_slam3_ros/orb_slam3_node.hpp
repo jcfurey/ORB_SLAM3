@@ -113,6 +113,12 @@ private:
   bool publish_pointcloud_{true};
   bool autostart_{true};
 
+  // ~/path growth/bandwidth bounds (the raw Path otherwise grows without bound
+  // and is re-serialized in full on every frame).
+  int path_max_poses_{1000};          // 0 = unlimited
+  double path_min_distance_{0.05};    // m moved before appending a new pose; 0 = every frame
+  double path_publish_period_{1.0};   // s between ~/path publishes; 0 = every appended pose
+
   // covariance model
   CovarianceMode covariance_mode_{CovarianceMode::kQuality};
   std::array<double, 6> pose_cov_diagonal_{{0.01, 0.01, 0.01, 0.0025, 0.0025, 0.0025}};
@@ -133,6 +139,7 @@ private:
   rclcpp::TimerBase::SharedPtr autostart_timer_;
 
   nav_msgs::msg::Path path_;
+  rclcpp::Time last_path_pub_time_{0, 0, RCL_ROS_TIME};
 
   // IMU buffer
   std::mutex imu_mutex_;

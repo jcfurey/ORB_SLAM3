@@ -61,6 +61,11 @@ OrbSlam3LifecycleNode::OrbSlam3LifecycleNode(
   declare_parameter<bool>("publish_odom", true);  // nav_msgs/Odometry (pose + covariance) for fusion
   declare_parameter<bool>("publish_path", true);
   declare_parameter<bool>("publish_pointcloud", true);
+  // ~/path bounds: without them the Path grows without bound and is re-serialized
+  // in full on every frame (O(n^2) cumulative bandwidth over a long run).
+  declare_parameter<int>("path_max_poses", 1000);          // 0 = unlimited
+  declare_parameter<double>("path_min_distance", 0.05);    // m moved before appending; 0 = every frame
+  declare_parameter<double>("path_publish_period", 1.0);   // s between publishes; 0 = every append
 
   // Covariance model for ~/odom. "quality" (default) scales the base diagonal up
   // as tracking degrades; "static" emits the base diagonal unchanged; "g2o" uses
@@ -126,6 +131,9 @@ OrbSlam3LifecycleNode::on_configure(const rclcpp_lifecycle::State &)
   publish_odom_ = get_parameter("publish_odom").as_bool();
   publish_path_ = get_parameter("publish_path").as_bool();
   publish_pointcloud_ = get_parameter("publish_pointcloud").as_bool();
+  path_max_poses_ = std::max<int>(0, get_parameter("path_max_poses").as_int());
+  path_min_distance_ = std::max(0.0, get_parameter("path_min_distance").as_double());
+  path_publish_period_ = std::max(0.0, get_parameter("path_publish_period").as_double());
 
   const std::string cov_mode = get_parameter("covariance_mode").as_string();
   if (cov_mode == "static") {
@@ -184,6 +192,7 @@ OrbSlam3LifecycleNode::on_configure(const rclcpp_lifecycle::State &)
   diag_->add("tracking", this, &OrbSlam3LifecycleNode::produceDiagnostics);
 
   path_ = nav_msgs::msg::Path();
+  last_path_pub_time_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
   path_.header.frame_id = world_frame_id_;
   return CallbackReturn::SUCCESS;
 }
@@ -346,9 +355,36 @@ void OrbSlam3LifecycleNode::publishTracking(const Sophus::SE3f & Tcw, const rclc
       pose_pub_->publish(ps);
     }
     if (publish_path_) {
-      path_.header.stamp = stamp;
-      path_.poses.push_back(ps);
-      path_pub_->publish(path_);
+      bool appended = false;
+      if (path_.poses.empty() || path_min_distance_ <= 0.0) {
+        appended = true;
+      } else {
+        const auto & lp = path_.poses.back().pose.position;
+        const double dx = ps.pose.position.x - lp.x;
+        const double dy = ps.pose.position.y - lp.y;
+        const double dz = ps.pose.position.z - lp.z;
+        appended = (dx * dx + dy * dy + dz * dz) >=
+          path_min_distance_ * path_min_distance_;
+      }
+      if (appended) {
+        path_.poses.push_back(ps);
+        if (path_max_poses_ > 0 &&
+          path_.poses.size() > static_cast<size_t>(path_max_poses_))
+        {
+          path_.poses.erase(
+            path_.poses.begin(),
+            path_.poses.begin() + (path_.poses.size() - path_max_poses_));
+        }
+      }
+      // Throttle the full-message republish; the path itself still accumulates.
+      if (appended &&
+        (path_publish_period_ <= 0.0 ||
+        (now - last_path_pub_time_).seconds() >= path_publish_period_))
+      {
+        path_.header.stamp = stamp;
+        path_pub_->publish(path_);
+        last_path_pub_time_ = now;
+      }
     }
     if (publish_odom_) {
       nav_msgs::msg::Odometry odom;

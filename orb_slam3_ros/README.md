@@ -45,6 +45,9 @@ Design highlights:
 | `qos_depth` | `5` | subscription queue depth |
 | `sync_queue_size` | `30` | approximate-time sync queue (rgbd/stereo) |
 | `publish_tf` / `publish_pose` / `publish_path` / `publish_pointcloud` | `true` | output toggles |
+| `path_max_poses` | `1000` | cap on `~/path` length (`0` = unlimited) |
+| `path_min_distance` | `0.05` | metres moved before appending to `~/path` (`0` = every frame) |
+| `path_publish_period` | `1.0` | seconds between `~/path` republishes (`0` = every append) |
 | `use_pangolin_viewer` | `false` | open the Pangolin window (needs a viewer build) |
 | `autostart` | `true` | self-configure + activate on start |
 
