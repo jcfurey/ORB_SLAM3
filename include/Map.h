@@ -25,6 +25,7 @@
 
 #include <set>
 #include <mutex>
+#include <atomic>
 
 #include <boost/serialization/base_object.hpp>
 
@@ -191,7 +192,7 @@ protected:
     // OpenGL/Pangolin dependency and stays usable in headless downstream builds.
     unsigned char* mThumbnail;
 
-    bool mIsInUse;
+    std::atomic<bool> mIsInUse;   // toggled by Atlas, read by IsInUse() from other threads
     bool mHasTumbnail;
     bool mbBad = false;
 

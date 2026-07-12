@@ -536,20 +536,15 @@ void System::Shutdown()
             usleep(5000);
     }*/
 
-    // Wait until all thread have effectively stopped
-    /*while(!mpLocalMapper->isFinished() || !mpLoopCloser->isFinished() || mpLoopCloser->isRunningGBA())
+    // Wait until the mapping and loop-closing threads have effectively stopped, so
+    // that destroying the System (or its Atlas/maps) cannot race with a still-running
+    // thread. Without this, Shutdown() returns while those threads keep touching
+    // now-destroyed state -> dangling threads / crash on shutdown (e.g. a ROS node
+    // destroying the System). This wait was present but commented out upstream.
+    while(!mpLocalMapper->isFinished() || !mpLoopCloser->isFinished() || mpLoopCloser->isRunningGBA())
     {
-        if(!mpLocalMapper->isFinished())
-            cout << "mpLocalMapper is not finished" << endl;*/
-        /*if(!mpLoopCloser->isFinished())
-            cout << "mpLoopCloser is not finished" << endl;
-        if(mpLoopCloser->isRunningGBA()){
-            cout << "mpLoopCloser is running GBA" << endl;
-            cout << "break anyway..." << endl;
-            break;
-        }*/
-        /*usleep(5000);
-    }*/
+        usleep(5000);
+    }
 
     if(!mStrSaveAtlasToFile.empty())
     {

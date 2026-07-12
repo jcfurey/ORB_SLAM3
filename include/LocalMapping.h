@@ -168,6 +168,7 @@ protected:
     std::list<MapPoint*> mlpRecentAddedMapPoints;
 
     std::mutex mMutexNewKFs;
+    std::mutex mMutexCurrentKF;   // guards mpCurrentKeyFrame for the cross-thread GetCurrKF*() getters
 
     bool mbAbortBA;
 

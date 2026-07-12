@@ -299,6 +299,7 @@ void LocalMapping::ProcessNewKeyFrame()
 {
     {
         unique_lock<mutex> lock(mMutexNewKFs);
+        unique_lock<mutex> lock2(mMutexCurrentKF);
         mpCurrentKeyFrame = mlNewKeyFrames.front();
         mlNewKeyFrames.pop_front();
     }
@@ -1505,7 +1506,7 @@ bool LocalMapping::IsInitializing()
 
 double LocalMapping::GetCurrKFTime()
 {
-
+    unique_lock<mutex> lock(mMutexCurrentKF);
     if (mpCurrentKeyFrame)
     {
         return mpCurrentKeyFrame->mTimeStamp;
@@ -1516,6 +1517,7 @@ double LocalMapping::GetCurrKFTime()
 
 KeyFrame* LocalMapping::GetCurrKF()
 {
+    unique_lock<mutex> lock(mMutexCurrentKF);
     return mpCurrentKeyFrame;
 }
 
