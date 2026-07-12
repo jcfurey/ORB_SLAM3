@@ -12,9 +12,9 @@
 #include <vector>
 
 #include <cv_bridge/cv_bridge.hpp>
-#include <message_filters/subscriber.h>
-#include <message_filters/synchronizer.h>
-#include <message_filters/sync_policies/approximate_time.h>
+#include <message_filters/subscriber.hpp>
+#include <message_filters/synchronizer.hpp>
+#include <message_filters/sync_policies/approximate_time.hpp>
 
 namespace orb_slam3_ros
 {
@@ -37,8 +37,8 @@ protected:
 
   void createSubscriptions() override
   {
-    left_sub_.subscribe(this, left_topic_, sensorQoSProfile());
-    right_sub_.subscribe(this, right_topic_, sensorQoSProfile());
+    left_sub_.subscribe(this, left_topic_, sensorQoS());
+    right_sub_.subscribe(this, right_topic_, sensorQoS());
     sync_ = std::make_shared<message_filters::Synchronizer<SyncPolicy>>(
       SyncPolicy(sync_queue_), left_sub_, right_sub_);
     sync_->registerCallback(
@@ -81,7 +81,7 @@ private:
 
   std::string left_topic_, right_topic_, imu_topic_;
   int sync_queue_{30};
-  message_filters::Subscriber<ImageMsg, rclcpp_lifecycle::LifecycleNode> left_sub_, right_sub_;
+  message_filters::Subscriber<ImageMsg> left_sub_, right_sub_;
   std::shared_ptr<message_filters::Synchronizer<SyncPolicy>> sync_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
 };

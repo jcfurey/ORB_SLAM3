@@ -191,11 +191,6 @@ rclcpp::QoS OrbSlam3LifecycleNode::sensorQoS() const
   return qos;
 }
 
-rmw_qos_profile_t OrbSlam3LifecycleNode::sensorQoSProfile() const
-{
-  return sensorQoS().get_rmw_qos_profile();
-}
-
 cv::Mat OrbSlam3LifecycleNode::toMono(const sensor_msgs::msg::Image::ConstSharedPtr & msg) const
 {
   // cv_bridge converts bgr8/rgb8/bgra8/rgba8/mono16/mono8 -> mono8 robustly, so

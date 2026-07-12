@@ -69,8 +69,7 @@ protected:
   void publishTracking(const Sophus::SE3f & Tcw, const rclcpp::Time & stamp);
 
   // --- helpers for subclasses ---
-  rclcpp::QoS sensorQoS() const;                 // configurable image/IMU QoS
-  rmw_qos_profile_t sensorQoSProfile() const;    // same, for message_filters
+  rclcpp::QoS sensorQoS() const;                 // configurable image/IMU QoS (also feeds message_filters subscribers)
   cv::Mat toMono(const sensor_msgs::msg::Image::ConstSharedPtr & msg) const;
   cv::Mat toDepth(const sensor_msgs::msg::Image::ConstSharedPtr & msg) const;
   void pushImu(const sensor_msgs::msg::Imu & imu);
