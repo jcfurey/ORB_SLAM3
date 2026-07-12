@@ -8,9 +8,7 @@
 #include <string>
 
 #include <cv_bridge/cv_bridge.hpp>
-#include <message_filters/subscriber.hpp>
-#include <message_filters/synchronizer.hpp>
-#include <message_filters/sync_policies/approximate_time.hpp>
+#include "orb_slam3_ros/mf_compat.hpp"
 
 namespace orb_slam3_ros
 {
@@ -33,8 +31,8 @@ protected:
 
   void createSubscriptions() override
   {
-    rgb_sub_.subscribe(this, rgb_topic_, sensorQoS());
-    depth_sub_.subscribe(this, depth_topic_, sensorQoS());
+    mfSubscribe(rgb_sub_, this, rgb_topic_, sensorQoS());
+    mfSubscribe(depth_sub_, this, depth_topic_, sensorQoS());
     sync_ = std::make_shared<message_filters::Synchronizer<SyncPolicy>>(
       SyncPolicy(sync_queue_), rgb_sub_, depth_sub_);
     sync_->registerCallback(
@@ -67,7 +65,7 @@ private:
 
   std::string rgb_topic_, depth_topic_;
   int sync_queue_{30};
-  message_filters::Subscriber<ImageMsg> rgb_sub_, depth_sub_;
+  MfSubscriber<ImageMsg> rgb_sub_, depth_sub_;
   std::shared_ptr<message_filters::Synchronizer<SyncPolicy>> sync_;
 };
 

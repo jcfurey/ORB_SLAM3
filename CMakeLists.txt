@@ -267,6 +267,16 @@ if(ORB_SLAM3_BUILD_ROS_NODES)
   target_include_directories(orb_slam3_ros PUBLIC
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/orb_slam3_ros/include>")
   target_link_libraries(orb_slam3_ros ${PROJECT_NAME} ${OpenCV_LIBS})
+
+  # message_filters dual-distro support (see orb_slam3_ros/mf_compat.hpp):
+  # 4.x (Jazzy) subscribes with Subscriber<M, NodeT> + rmw_qos_profile_t;
+  # >= 6 (Kilted/Lyrical) with the interface-based Subscriber<M> + rclcpp::QoS.
+  if(message_filters_VERSION VERSION_LESS 6)
+    target_compile_definitions(orb_slam3_ros PRIVATE ORB_SLAM3_MF_LEGACY_API=1)
+    message(STATUS "[orb_slam3] message_filters ${message_filters_VERSION}: legacy (Jazzy) API")
+  else()
+    message(STATUS "[orb_slam3] message_filters ${message_filters_VERSION}: modern API")
+  endif()
   # ament_target_dependencies() was removed in ament_cmake 2.8 (the ROS 'lyrical'
   # toolchain on this host). Link each dependency's exported IMPORTED targets
   # instead: find_package(<pkg>) populates ${<pkg>_TARGETS}, which carry that
