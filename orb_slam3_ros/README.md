@@ -59,6 +59,11 @@ Design highlights:
 - TF: `world_frame_id → camera_frame_id`
 - `/diagnostics` — `diagnostic_msgs/DiagnosticArray`
 
+> **Underwater / ROV (RTSP streams):** see `docs/UNDERWATER_ROV.md` for a
+> literature-backed assessment, in-water calibration guidance, RTSP-bridge
+> timestamping (vision-only vs. inertial), and the recommended
+> fuse-with-DVL/depth architecture.
+
 ## Camera quick-starts
 
 > The camera driver is separate; run it first. `settings_file` must match the
