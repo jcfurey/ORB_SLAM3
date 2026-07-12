@@ -64,6 +64,54 @@ Design highlights:
 > timestamping (vision-only vs. inertial), and the recommended
 > fuse-with-DVL/depth architecture.
 
+## Input contract (for camera / RTSP-bridge authors)
+
+What these nodes require of an upstream image/IMU publisher. Build to this and
+any source — a hardware driver, a bag, or a custom RTSP→ROS bridge — drops in.
+
+### `sensor_msgs/Image` (all nodes)
+- **Encoding — colour or mono both fine.** Frames are converted to `mono8`
+  internally via `cv_bridge::toCvCopy(..., MONO8)`, which accepts
+  `mono8 / mono16 / bgr8 / rgb8 / bgra8 / rgba8` (and `bayer_*`). Publish whatever
+  the camera gives; do **not** pre-convert to grayscale on our account.
+- **`header.stamp` is authoritative.** It is used as the frame time (motion model
+  Δt, sync, and every output stamp). It must be **monotonically increasing** and,
+  for the **inertial modes, on the same clock as the IMU to within a few ms**
+  (see `docs/UNDERWATER_ROV.md` §4 — receipt-time is fine for vision-only, not for
+  VIO). Zero/one-per-frame duplicate stamps will break tracking.
+- **`header.frame_id` is not required.** The published TF/pose frames come from the
+  `world_frame_id` / `camera_frame_id` parameters, not from the image header. Set
+  a sensible `frame_id` anyway for good hygiene, but it does not need to match.
+- **QoS.** Nodes subscribe with `qos_reliability` (default `sensor_data` =
+  BEST_EFFORT, depth `qos_depth`). For a **local** bridge on the same host, publish
+  and run the node with `qos_reliability:=reliable` so no frames are silently
+  dropped by a QoS mismatch (the #1 "launched but no data" cause).
+
+### Depth (`rgbd_node`)
+- Native encoding is preserved (`toCvCopy(msg, msg->encoding)`): publish
+  **`16UC1` in millimetres** (RealSense/OAK convention) or **`32FC1` in metres**.
+  The metres-per-unit conversion is `RGBD.DepthMapFactor` in the ORB-SLAM3
+  `settings.yaml` (1000.0 for mm, 1.0 for m) — **not** a node parameter.
+- Depth must be **registered/aligned to the colour frame** and share its timestamp
+  closely (approximate-time synced, `sync_queue_size`).
+
+### Stereo (`stereo_node`, `stereo_inertial_node`)
+- Left/right must be **rectified** and epipolar-aligned (ORB-SLAM3 assumes it),
+  with near-identical stamps (approximate-time synced). The rectification/baseline
+  live in `settings.yaml`.
+
+### IMU (`stereo_inertial_node`)
+- One **combined** `sensor_msgs/Imu` topic (linear acceleration + angular velocity
+  populated). RealSense: `unite_imu_method`; split accel/gyro topics are **not**
+  consumed. Stamps must share the image clock (see above).
+
+### Intrinsics — the important gotcha
+**`CameraInfo` is NOT consumed.** ORB-SLAM3 reads all camera intrinsics,
+distortion, resolution, fps, baseline, and IMU noise/extrinsics from the
+`settings_file` YAML. A bridge should still publish `CameraInfo` for the rest of
+the ROS graph (RViz, image_proc), but changing it will **not** change SLAM
+behaviour — keep the YAML and the `CameraInfo` in sync yourself.
+
 ## Camera quick-starts
 
 > The camera driver is separate; run it first. `settings_file` must match the
