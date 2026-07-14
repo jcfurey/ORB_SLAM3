@@ -17,6 +17,7 @@
 #include <tf2_eigen/tf2_eigen.hpp>
 
 #include <Eigen/Geometry>
+#include <Eigen/Eigenvalues>
 
 #include "MapPoint.h"
 
@@ -52,10 +53,21 @@ OrbSlam3LifecycleNode::OrbSlam3LifecycleNode(
   declare_parameter<bool>("use_pangolin_viewer", false);
   declare_parameter<std::string>("world_frame_id", "map");
   declare_parameter<std::string>("camera_frame_id", "camera");
-  // Child frame stamped on ~/odom; empty -> reuse camera_frame_id.
+  // Child frame stamped on ~/odom; empty -> reuse camera_frame_id (or base_frame_id).
   declare_parameter<std::string>("odom_child_frame_id", "");
+  // Robot body frame (REP-105). When set, pose/odom/TF are published as
+  // base_frame_id-in-world (child_frame_id = base_frame_id), transformed through the
+  // static camera->base extrinsic looked up from TF. This is the form
+  // robot_localization expects from a map-frame source, and it yields a single-parent
+  // TF tree (world -> base -> camera) for standalone use. Leave empty for the legacy
+  // camera-frame output. For robot_localization set publish_tf:=false so the map EKF
+  // owns the world->odom transform (see docs/ROBOT_LOCALIZATION.md).
+  declare_parameter<std::string>("base_frame_id", "");
   declare_parameter<std::string>("qos_reliability", "sensor_data");  // "sensor_data"|"reliable"
   declare_parameter<int>("qos_depth", 5);
+  // Cap on buffered IMU samples (inertial nodes) before the oldest are dropped —
+  // bounds memory if the IMU/image clocks are offset. ~25 s at 200 Hz by default.
+  declare_parameter<int>("imu_buffer_max", 5000);
   declare_parameter<bool>("publish_tf", true);
   declare_parameter<bool>("publish_pose", true);
   declare_parameter<bool>("publish_odom", true);  // nav_msgs/Odometry (pose + covariance) for fusion
@@ -87,6 +99,10 @@ OrbSlam3LifecycleNode::OrbSlam3LifecycleNode(
   // g2o mode: include the SE3 adjoint lever-arm term (true = full world-frame
   // marginal; false = body-frame covariance with axes rotated into the world).
   declare_parameter<bool>("covariance_g2o_lever_arm", true);
+  // Minimum eigenvalue enforced on every published covariance so it stays strictly
+  // positive-definite (robot_localization Cholesky-factorizes it; a singular or
+  // non-PD 6x6 is rejected or NaN-propagates).
+  declare_parameter<double>("covariance_spd_floor", 1e-9);
 
   autostart_ = declare_parameter<bool>("autostart", true);
 
@@ -120,12 +136,17 @@ OrbSlam3LifecycleNode::on_configure(const rclcpp_lifecycle::State &)
   use_viewer_ = get_parameter("use_pangolin_viewer").as_bool();
   world_frame_id_ = get_parameter("world_frame_id").as_string();
   camera_frame_id_ = get_parameter("camera_frame_id").as_string();
+  base_frame_id_ = get_parameter("base_frame_id").as_string();
   odom_child_frame_id_ = get_parameter("odom_child_frame_id").as_string();
   if (odom_child_frame_id_.empty()) {
-    odom_child_frame_id_ = camera_frame_id_;
+    // In base-frame mode the natural odom child is the robot body frame.
+    odom_child_frame_id_ = base_frame_id_.empty() ? camera_frame_id_ : base_frame_id_;
   }
+  is_monocular_ = (sensor_type_ == ORB_SLAM3::System::MONOCULAR ||
+    sensor_type_ == ORB_SLAM3::System::IMU_MONOCULAR);
   qos_reliability_ = get_parameter("qos_reliability").as_string();
   qos_depth_ = get_parameter("qos_depth").as_int();
+  imu_buffer_max_ = static_cast<size_t>(std::max<int64_t>(100, get_parameter("imu_buffer_max").as_int()));
   publish_tf_ = get_parameter("publish_tf").as_bool();
   publish_pose_ = get_parameter("publish_pose").as_bool();
   publish_odom_ = get_parameter("publish_odom").as_bool();
@@ -161,6 +182,22 @@ OrbSlam3LifecycleNode::on_configure(const rclcpp_lifecycle::State &)
   cov_recently_lost_scale_ = std::max(1.0, get_parameter("covariance_recently_lost_scale").as_double());
   cov_g2o_scale_ = std::max(1e-9, get_parameter("covariance_g2o_scale").as_double());
   cov_g2o_lever_arm_ = get_parameter("covariance_g2o_lever_arm").as_bool();
+  cov_spd_floor_ = std::max(1e-12, get_parameter("covariance_spd_floor").as_double());
+  // A non-positive base variance would make the published covariance non-PD and be
+  // rejected by robot_localization; clamp to the SPD floor with a warning. (L16)
+  for (size_t i = 0; i < 6; ++i) {
+    if (!(pose_cov_diagonal_[i] > 0.0) || !std::isfinite(pose_cov_diagonal_[i])) {
+      RCLCPP_WARN(get_logger(),
+        "pose_covariance_diagonal[%zu] = %g is not a positive finite variance; "
+        "clamping to %g", i, pose_cov_diagonal_[i], cov_spd_floor_);
+      pose_cov_diagonal_[i] = cov_spd_floor_;
+    }
+  }
+  have_valid_g2o_diag_ = false;
+  have_cam_to_base_ = false;
+  warned_base_tf_ = false;
+  warned_base_double_parent_ = false;
+  warned_mono_cov_ = false;
 
   if (settings_file_.empty()) {
     RCLCPP_ERROR(get_logger(), "Parameter 'settings_file' (ORB-SLAM3 .yaml) is required.");
@@ -186,6 +223,12 @@ OrbSlam3LifecycleNode::on_configure(const rclcpp_lifecycle::State &)
   path_pub_ = create_publisher<nav_msgs::msg::Path>("~/path", rclcpp::QoS(10));
   cloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>("~/map_points", rclcpp::QoS(1));
   tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
+  if (!base_frame_id_.empty()) {
+    // Look up (and cache) the static camera->base extrinsic to republish in the
+    // robot body frame. Uses this node's clock so it works under use_sim_time.
+    tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
+    tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+  }
 
   diag_ = std::make_shared<diagnostic_updater::Updater>(this);
   diag_->setHardwareID("orb_slam3");
@@ -229,6 +272,9 @@ OrbSlam3LifecycleNode::on_cleanup(const rclcpp_lifecycle::State &)
   destroySubscriptions();
   diag_.reset();
   tf_broadcaster_.reset();
+  tf_listener_.reset();
+  tf_buffer_.reset();
+  have_cam_to_base_ = false;
   pose_pub_.reset();
   odom_pub_.reset();
   path_pub_.reset();
@@ -284,8 +330,25 @@ void OrbSlam3LifecycleNode::pushImu(const sensor_msgs::msg::Imu & imu)
   const cv::Point3f gyr(
     imu.angular_velocity.x, imu.angular_velocity.y, imu.angular_velocity.z);
   const double t = rclcpp::Time(imu.header.stamp).seconds();
-  std::lock_guard<std::mutex> lk(imu_mutex_);
-  imu_buffer_.emplace_back(acc, gyr, t);
+  bool overflow = false;
+  {
+    std::lock_guard<std::mutex> lk(imu_mutex_);
+    imu_buffer_.emplace_back(acc, gyr, t);
+    // Bound the buffer: if IMU stamps persistently run ahead of image stamps
+    // (clock offset, use_sim_time, images stalled), drainImu never pops and the
+    // deque grows without bound. Drop the oldest. (INVESTIGATION.md M17)
+    while (imu_buffer_.size() > imu_buffer_max_) {
+      imu_buffer_.pop_front();
+      ++imu_dropped_;
+      overflow = true;
+    }
+  }
+  if (overflow) {
+    RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+      "IMU buffer exceeded %zu samples (dropped %lu oldest total) — check the "
+      "IMU/image time sync (same clock, to within a few ms).",
+      imu_buffer_max_, static_cast<unsigned long>(imu_dropped_));
+  }
 }
 
 std::vector<ORB_SLAM3::IMU::Point> OrbSlam3LifecycleNode::drainImu(double t_frame)
@@ -314,7 +377,7 @@ void OrbSlam3LifecycleNode::publishTracking(const Sophus::SE3f & Tcw, const rclc
   if (last_track_time_.nanoseconds() > 0) {
     const double dt = (now - last_track_time_).seconds();
     if (dt > 1e-6) {
-      track_rate_hz_ = 0.9 * track_rate_hz_ + 0.1 * (1.0 / dt);
+      track_rate_hz_.store(0.9 * track_rate_hz_.load() + 0.1 * (1.0 / dt));
     }
   }
   last_track_time_ = now;
@@ -324,17 +387,60 @@ void OrbSlam3LifecycleNode::publishTracking(const Sophus::SE3f & Tcw, const rclc
   }
   frames_tracked_.fetch_add(1);
 
-  // System::Track* returns Tcw (world->camera); publish the camera-in-world pose.
+  // System::Track* returns Tcw (world->camera). Publish the camera-in-world pose,
+  // or — when base_frame_id_ is set — the robot body pose (base-in-world) obtained by
+  // composing the cached static camera->base extrinsic looked up from TF. The base
+  // form is the REP-105 shape robot_localization consumes from a map-frame source and
+  // gives a single-parent TF tree (world -> base -> camera).
   const Sophus::SE3f Twc = Tcw.inverse();
+  Sophus::SE3f Twp = Twc;                       // pose actually published
+  std::string body_frame = camera_frame_id_;    // its child frame id
+  if (!base_frame_id_.empty()) {
+    if (!have_cam_to_base_ && tf_buffer_) {
+      try {
+        const geometry_msgs::msg::TransformStamped tf_cb =
+          tf_buffer_->lookupTransform(camera_frame_id_, base_frame_id_, tf2::TimePointZero);
+        const Eigen::Isometry3d iso = tf2::transformToEigen(tf_cb.transform);
+        T_cam_base_ = Sophus::SE3f(
+          Eigen::Quaternionf(iso.rotation().cast<float>()).normalized(),
+          iso.translation().cast<float>());
+        have_cam_to_base_ = true;
+        RCLCPP_INFO(get_logger(),
+          "Resolved static %s -> %s; publishing pose/odom/TF in the base frame.",
+          camera_frame_id_.c_str(), base_frame_id_.c_str());
+      } catch (const tf2::TransformException & e) {
+        if (!warned_base_tf_) {
+          RCLCPP_WARN(get_logger(),
+            "base_frame_id='%s' set but %s->%s is not in TF yet (%s); publishing the "
+            "camera frame until it appears (is base_to_camera.launch.py running?).",
+            base_frame_id_.c_str(), camera_frame_id_.c_str(),
+            base_frame_id_.c_str(), e.what());
+          warned_base_tf_ = true;
+        }
+      }
+    }
+    if (have_cam_to_base_) {
+      Twp = Twc * T_cam_base_;
+      body_frame = base_frame_id_;
+    }
+  }
 
   if (publish_tf_) {
+    if (!base_frame_id_.empty() && !warned_base_double_parent_) {
+      RCLCPP_WARN(get_logger(),
+        "publish_tf:=true with base_frame_id set broadcasts %s->%s; set "
+        "publish_tf:=false when feeding robot_localization, whose map EKF owns the "
+        "%s->odom transform (see docs/ROBOT_LOCALIZATION.md).",
+        world_frame_id_.c_str(), body_frame.c_str(), world_frame_id_.c_str());
+      warned_base_double_parent_ = true;
+    }
     Eigen::Isometry3d iso = Eigen::Isometry3d::Identity();
-    iso.linear() = Twc.rotationMatrix().cast<double>();
-    iso.translation() = Twc.translation().cast<double>();
+    iso.linear() = Twp.rotationMatrix().cast<double>();
+    iso.translation() = Twp.translation().cast<double>();
     geometry_msgs::msg::TransformStamped tf = tf2::eigenToTransform(iso);
     tf.header.stamp = stamp;
     tf.header.frame_id = world_frame_id_;
-    tf.child_frame_id = camera_frame_id_;
+    tf.child_frame_id = body_frame;
     tf_broadcaster_->sendTransform(tf);
   }
 
@@ -342,8 +448,8 @@ void OrbSlam3LifecycleNode::publishTracking(const Sophus::SE3f & Tcw, const rclc
     geometry_msgs::msg::PoseStamped ps;
     ps.header.stamp = stamp;
     ps.header.frame_id = world_frame_id_;
-    const Eigen::Vector3f t = Twc.translation();
-    const Eigen::Quaternionf q = Twc.unit_quaternion();
+    const Eigen::Vector3f t = Twp.translation();
+    const Eigen::Quaternionf q = Twp.unit_quaternion();
     ps.pose.position.x = t.x();
     ps.pose.position.y = t.y();
     ps.pose.position.z = t.z();
@@ -458,6 +564,19 @@ std::array<double, 36> OrbSlam3LifecycleNode::computePoseCovariance(const Sophus
       for (int r = 0; r < 6; ++r) {
         for (int c = 0; c < 6; ++c) {cov[r * 6 + c] = Sr(r, c);}
       }
+      // Pure-monocular Sigma is in the map's arbitrary (unobservable) scale, so the
+      // published metres^2 are really (map-unit)^2 and drift with scale — warn once. (M19)
+      if (is_monocular_ && !warned_mono_cov_) {
+        RCLCPP_WARN(get_logger(),
+          "covariance_mode=g2o with a monocular sensor: ~/odom covariance is in the "
+          "map's arbitrary scale (non-metric) and drifts with scale. Prefer "
+          "stereo/RGBD or post-IMU-init, or treat the values as relative. (M19)");
+        warned_mono_cov_ = true;
+      }
+      sanitizeSpd(cov);                       // guarantee SPD/finite for the consumer
+      for (size_t i = 0; i < 6; ++i) {last_valid_g2o_diag_[i] = cov[i * 6 + i];}
+      have_valid_g2o_diag_ = true;
+      last_valid_g2o_time_ = this->now();
       last_cov_scale_ = 1.0;  // scale is carried inside the marginal
       return cov;
     }
@@ -481,7 +600,53 @@ std::array<double, 36> OrbSlam3LifecycleNode::computePoseCovariance(const Sophus
   for (size_t i = 0; i < 6; ++i) {
     cov[i * 6 + i] = pose_cov_diagonal_[i] * var_scale;
   }
+  // g2o-mode fallback smoothing: a frame without a marginal must not suddenly report a
+  // much smaller (or structurally different) covariance than the last valid one, or a
+  // consistency-sensitive filter reads it as a jump in trust. Hold at least the last
+  // valid marginal, inflated by the time since it was produced. (M20)
+  if (covariance_mode_ == CovarianceMode::kG2o && have_valid_g2o_diag_) {
+    const double dt = std::max(0.0, (this->now() - last_valid_g2o_time_).seconds());
+    const double infl = std::min(cov_max_scale_ * cov_max_scale_, 1.0 + dt);
+    for (size_t i = 0; i < 6; ++i) {
+      cov[i * 6 + i] = std::max(cov[i * 6 + i], last_valid_g2o_diag_[i] * infl);
+    }
+  }
+  sanitizeSpd(cov);
   return cov;
+}
+
+void OrbSlam3LifecycleNode::sanitizeSpd(std::array<double, 36> & cov) const
+{
+  Eigen::Matrix<double, 6, 6> M;
+  for (int r = 0; r < 6; ++r) {
+    for (int c = 0; c < 6; ++c) {M(r, c) = cov[r * 6 + c];}
+  }
+  M = 0.5 * (M + M.transpose());              // symmetrize
+  bool ok = M.allFinite();
+  if (ok) {
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 6, 6>> es(M);
+    if (es.info() == Eigen::Success) {
+      Eigen::Matrix<double, 6, 1> ev = es.eigenvalues();
+      bool clamped = false;
+      for (int i = 0; i < 6; ++i) {
+        if (!(ev[i] >= cov_spd_floor_)) {ev[i] = cov_spd_floor_; clamped = true;}
+      }
+      if (clamped) {
+        M = es.eigenvectors() * ev.asDiagonal() * es.eigenvectors().transpose();
+        M = 0.5 * (M + M.transpose());
+      }
+    } else {
+      ok = false;
+    }
+  }
+  if (!ok) {
+    // Degenerate/non-finite input: fall back to a safe diagonal from the base variances.
+    M.setZero();
+    for (int i = 0; i < 6; ++i) {M(i, i) = std::max(cov_spd_floor_, pose_cov_diagonal_[i]);}
+  }
+  for (int r = 0; r < 6; ++r) {
+    for (int c = 0; c < 6; ++c) {cov[r * 6 + c] = M(r, c);}
+  }
 }
 
 void OrbSlam3LifecycleNode::produceDiagnostics(diagnostic_updater::DiagnosticStatusWrapper & stat)
@@ -507,7 +672,7 @@ void OrbSlam3LifecycleNode::produceDiagnostics(diagnostic_updater::DiagnosticSta
   }
   stat.add("tracking_state", name);
   stat.add("frames_tracked", static_cast<int>(frames_tracked_.load()));
-  stat.add("track_rate_hz", track_rate_hz_);
+  stat.add("track_rate_hz", track_rate_hz_.load());
   stat.add("sensor_type", static_cast<int>(sensor_type_));
   if (slam_) {
     stat.add("track_inliers", slam_->GetTrackedInliers());
@@ -516,7 +681,7 @@ void OrbSlam3LifecycleNode::produceDiagnostics(diagnostic_updater::DiagnosticSta
   if (covariance_mode_ == CovarianceMode::kStatic) {cov_name = "static";}
   else if (covariance_mode_ == CovarianceMode::kG2o) {cov_name = "g2o";}
   stat.add("covariance_mode", cov_name);
-  stat.add("covariance_scale", last_cov_scale_);
+  stat.add("covariance_scale", last_cov_scale_.load());
   {
     std::lock_guard<std::mutex> lk(imu_mutex_);
     stat.add("imu_buffer", static_cast<int>(imu_buffer_.size()));

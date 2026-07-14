@@ -30,6 +30,8 @@
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <tf2_ros/transform_broadcaster.h>
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.h>
 #include <diagnostic_updater/diagnostic_updater.hpp>
 
 #include <opencv2/core.hpp>
@@ -95,7 +97,13 @@ private:
   };
   // Fill a row-major 6x6 covariance (nav_msgs order [x y z roll pitch yaw]) for
   // the world-frame pose Twc, per covariance_mode_ and the current tracking health.
+  // Always returns a symmetric positive-definite, finite matrix (robot_localization
+  // Cholesky-factorizes it), keyed on the camera pose Twc — the world-frame
+  // (left-perturbation) covariance is invariant under a rigid camera->base offset,
+  // so the same matrix is valid whether the message carries the camera or base pose.
   std::array<double, 36> computePoseCovariance(const Sophus::SE3f & Twc);
+  // Symmetrize + eigenvalue-floor + de-NaN a 6x6 so it is guaranteed SPD/finite.
+  void sanitizeSpd(std::array<double, 36> & cov) const;
 
   // parameters
   std::string voc_file_;
@@ -103,6 +111,11 @@ private:
   std::string world_frame_id_;
   std::string camera_frame_id_;
   std::string odom_child_frame_id_;
+  // Robot body frame (REP-105). When non-empty, the node looks up the static
+  // camera->base extrinsic from TF and republishes pose/odom/TF as base_link-in-map
+  // (child_frame_id = base_frame_id_), the form robot_localization expects from a
+  // map-frame source. Empty (default) keeps the legacy camera-frame output.
+  std::string base_frame_id_;
   std::string qos_reliability_;
   int qos_depth_{5};
   bool use_viewer_{false};
@@ -127,7 +140,17 @@ private:
   double cov_recently_lost_scale_{5.0};
   double cov_g2o_scale_{1.0};
   bool cov_g2o_lever_arm_{true};
-  double last_cov_scale_{1.0};  // diagnostics: last quality scale applied
+  double cov_spd_floor_{1e-9};   // min eigenvalue enforced on every published covariance
+  // written on the image-callback thread, read in the diagnostic-timer callback -> atomic (L15)
+  std::atomic<double> last_cov_scale_{1.0};   // diagnostics: last quality scale applied
+  bool is_monocular_{false};     // scale-ambiguous sensor (covariance non-metric)
+  bool warned_mono_cov_{false};
+
+  // g2o-mode fallback smoothing (M20): remember the last valid marginal so a frame
+  // without one does not jump 1-3 orders of magnitude on ~/odom.
+  std::array<double, 6> last_valid_g2o_diag_{{0, 0, 0, 0, 0, 0}};
+  bool have_valid_g2o_diag_{false};
+  rclcpp::Time last_valid_g2o_time_{0, 0, RCL_ROS_TIME};
 
   // publishers / tf / diagnostics
   rclcpp_lifecycle::LifecyclePublisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_pub_;
@@ -138,20 +161,31 @@ private:
   std::shared_ptr<diagnostic_updater::Updater> diag_;
   rclcpp::TimerBase::SharedPtr autostart_timer_;
 
+  // TF lookup of the static camera->base extrinsic (only when base_frame_id_ is set).
+  std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
+  std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+  Sophus::SE3f T_cam_base_;          // camera_frame -> base_frame (cached once resolved)
+  bool have_cam_to_base_{false};
+  bool warned_base_tf_{false};
+  bool warned_base_double_parent_{false};
+
   nav_msgs::msg::Path path_;
   rclcpp::Time last_path_pub_time_{0, 0, RCL_ROS_TIME};
 
-  // IMU buffer
+  // IMU buffer (bounded: a persistent IMU/image clock offset would otherwise make
+  // drainImu never drain and the deque grow without bound).
   std::mutex imu_mutex_;
   std::deque<ORB_SLAM3::IMU::Point> imu_buffer_;
   double last_imu_drain_t_{-1.0};
+  size_t imu_buffer_max_{5000};   // cap on buffered IMU samples (M17)
+  uint64_t imu_dropped_{0};       // count of oldest samples dropped on overflow
 
   // diagnostics state
   std::atomic<bool> active_{false};
   std::atomic<int> last_tracking_state_{-1};
   std::atomic<uint64_t> frames_tracked_{0};
-  rclcpp::Time last_track_time_;
-  double track_rate_hz_{0.0};
+  rclcpp::Time last_track_time_;              // image-callback thread only
+  std::atomic<double> track_rate_hz_{0.0};    // read in diagnostics -> atomic (L15)
 };
 
 }  // namespace orb_slam3_ros

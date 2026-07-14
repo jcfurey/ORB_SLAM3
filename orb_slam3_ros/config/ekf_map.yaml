@@ -1,0 +1,42 @@
+# robot_localization map-frame EKF that fuses the ORB-SLAM3 absolute pose and
+# publishes the REP-105 `map -> odom` transform.
+#
+# This is the *global* half of the standard dual-EKF setup. Pair it with an
+# *odom-frame* EKF that fuses your continuous sensors (wheel odometry, IMU) and
+# publishes `odom -> base_link`. ORB-SLAM3 provides an absolute pose only (no
+# velocity), so it belongs on the map EKF. See docs/ROBOT_LOCALIZATION.md.
+#
+# Run the ORB-SLAM3 node with:  base_frame_id:=base_link  publish_tf:=false
+# (so this EKF owns `map -> odom`) and, ideally, covariance_mode:=g2o.
+ekf_map:
+  ros__parameters:
+    frequency: 30.0
+    sensor_timeout: 0.2
+    two_d_mode: false            # true for a planar ground robot (zeroes z/roll/pitch)
+    publish_tf: true
+    print_diagnostics: true
+
+    map_frame: map
+    odom_frame: odom
+    base_link_frame: base_link
+    world_frame: map             # this EKF estimates the pose in the map frame
+
+    # --- ORB-SLAM3 absolute pose --------------------------------------------
+    # nav_msgs/Odometry, header.frame_id = map, child_frame_id = base_link.
+    # Remap or edit this topic to match your node name (default mono node shown).
+    odom0: /orb_slam3_mono/odom
+    # Fuse absolute position + orientation; ORB-SLAM3 has no twist, so leave the
+    # velocity/acceleration rows false (its ~/odom twist covariance is 1e6 anyway).
+    odom0_config: [true,  true,  true,      # x,  y,  z
+                   true,  true,  true,      # roll, pitch, yaw
+                   false, false, false,     # vx, vy, vz
+                   false, false, false,     # vroll, vpitch, vyaw
+                   false, false, false]     # ax, ay, az
+    odom0_differential: false               # it is an absolute (map) measurement
+    odom0_relative: false
+    odom0_queue_size: 10
+    # Mahalanobis gate (uses the node's published covariance — set covariance_mode:=g2o).
+    odom0_pose_rejection_threshold: 6.0
+
+    # Defaults for process_noise_covariance / initial_estimate_covariance are a
+    # reasonable start; tune per platform (see the robot_localization docs).

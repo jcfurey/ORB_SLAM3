@@ -41,6 +41,7 @@ Design highlights:
 | `voc_file` | `<share>/orb_slam3/vocabulary/ORBvoc.txt` | ORB vocabulary |
 | `world_frame_id` | `map` | TF/pose parent frame |
 | `camera_frame_id` | `camera` | TF child frame (the camera optical frame) |
+| `base_frame_id` | *(empty)* | robot body frame; when set, pose/odom/TF are republished as **base_link-in-map** (child = `base_frame_id`) via the static `camera→base` TF — the REP-105 form `robot_localization` expects. See [`docs/ROBOT_LOCALIZATION.md`](../docs/ROBOT_LOCALIZATION.md). |
 | `qos_reliability` | `sensor_data` | `sensor_data` (best-effort) or `reliable` |
 | `qos_depth` | `5` | subscription queue depth |
 | `sync_queue_size` | `30` | approximate-time sync queue (rgbd/stereo) |
@@ -58,6 +59,14 @@ Design highlights:
 - `~/map_points` — `sensor_msgs/PointCloud2` (tracked map points, latched by demand)
 - TF: `world_frame_id → camera_frame_id`
 - `/diagnostics` — `diagnostic_msgs/DiagnosticArray`
+
+> **Sensor fusion (robot_localization etc.):** set `base_frame_id:=base_link
+> publish_tf:=false covariance_mode:=g2o` and feed `~/odom` to a map-frame EKF —
+> the node publishes an SPD, REP-105-correct absolute pose of `base_link` in `map`
+> and lets the EKF own `map → odom`. Turnkey:
+> `ros2 launch orb_slam3 robot_localization.launch.py settings_file:=/abs/mono.yaml`.
+> Full guide, covariance contract, and example EKF config in
+> [`docs/ROBOT_LOCALIZATION.md`](../docs/ROBOT_LOCALIZATION.md).
 
 > **Underwater / ROV (RTSP streams):** see `docs/UNDERWATER_ROV.md` for a
 > literature-backed assessment, in-water calibration guidance, RTSP-bridge
