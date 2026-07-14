@@ -1970,7 +1970,14 @@ namespace ORB_SLAM3
 
                         if(mbCheckOrientation)
                         {
-                            float rot = pKF->mvKeysUn[i].angle-CurrentFrame.mvKeysUn[bestIdx2].angle;
+                            // pKF->mvKeysUn has size NLeft for fisheye rigs, but i ranges
+                            // over all N=NLeft+NRight map-point matches; pick the correct
+                            // left/right raw keypoint or a right-camera match (i>=NLeft)
+                            // reads out of bounds. (INVESTIGATION.md H5)
+                            const cv::KeyPoint &kpKF = (pKF->NLeft == -1) ? pKF->mvKeysUn[i]
+                                                     : (i < pKF->NLeft)   ? pKF->mvKeys[i]
+                                                                          : pKF->mvKeysRight[i - pKF->NLeft];
+                            float rot = kpKF.angle-CurrentFrame.mvKeysUn[bestIdx2].angle;
                             if(rot<0.0)
                                 rot+=360.0f;
                             int bin = round(rot*factor);

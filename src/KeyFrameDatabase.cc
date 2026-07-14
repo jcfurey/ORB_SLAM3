@@ -710,7 +710,13 @@ void KeyFrameDatabase::DetectNBestCandidates(KeyFrame *pKF, vector<KeyFrame*> &v
     {
         KeyFrame* pKFi = it->second;
         if(pKFi->isBad())
+        {
+            // Must advance the cursor before continuing, or a bad KF (isBad is
+            // sticky) spins this loop forever and hangs LoopClosing. (INVESTIGATION.md H6)
+            i++;
+            it++;
             continue;
+        }
 
         if(!spAlreadyAddedKF.count(pKFi))
         {

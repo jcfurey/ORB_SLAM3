@@ -2902,6 +2902,14 @@ void Optimizer::LocalInertialBA(KeyFrame *pKF, bool *pbStopFlag, Map *pMap, int&
     optimizer.optimize(opt_it); // Originally to 2
     float err_end = optimizer.activeRobustChi2();
 
+    // If the BA was force-stopped it may have run zero iterations. Then
+    // err==err_end defeats the divergence guard below, and culling map-point
+    // observations on the *un-optimized* residuals would spuriously thin the
+    // local map. Bail out and leave the map untouched; the next LocalMapping
+    // pass re-runs BA on the updated window. (INVESTIGATION.md H8)
+    if(pbStopFlag && *pbStopFlag)
+        return;
+
     vector<pair<KeyFrame*,MapPoint*> > vToErase;
     vToErase.reserve(vpEdgesMono.size()+vpEdgesStereo.size());
 

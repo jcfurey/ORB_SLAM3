@@ -18,8 +18,10 @@ re-read the cited code and tried to *refute* the failure scenario, and a
 **literature/math** lens that checked the cited paper, equation, or
 mathematical claim (with web lookups where needed). Findings refuted by
 verification were dropped: **49 of 53 survived** and are merged into the **47
-distinct items** below. Coverage: Tracking, LocalMapping (+ VI init),
-LoopClosing/Merging (+ GBA), the Optimizer pose/BA/graph maths, the
+distinct items** below. A dedicated IMU-preintegration investigator was re-run
+afterward and adds **5 further findings** (spot-verified, marked as a
+supplementary pass), for **52 in total**. Coverage: Tracking, LocalMapping
+(+ VI init), LoopClosing/Merging (+ GBA), the Optimizer pose/BA/graph maths, the
 IMU-preintegration maths (`ImuTypes`/`G2oTypes`), the ORB extract/match
 front-end, two-view/PnP/Sim3/camera geometry, the Frame/KeyFrame/MapPoint/
 Map/Atlas/System data model, the ROS 2 node, the new `~/odom` covariance
@@ -36,16 +38,46 @@ investigator confidence was low, that is called out inline.
 
 ## Executive summary
 
-The `lyrical` fork is, on the whole, a faithful and now materially hardened ORB-SLAM3: the front-end, tracking state machine, local/global BA, loop-and-merge correction, and Atlas multi-map machinery all follow the published algorithms, and the ~25 applied fixes plus the restored `System::Shutdown()` wait loop close several genuine crash and race classes. However, this full-repository pass surfaced **47 distinct correctness findings that survived adversarial verification**, including eight High-severity defects that are live crashes, hangs, or silent estimator corruption on supported sensor configurations (visual-inertial monocular, stereo-fisheye, and the ROS TF tree). Two themes dominate: (1) the multi-camera (KannalaBrandt fisheye) paths remain the least-tested surface — several out-of-bounds indexes, a wrong-camera projection, and a mis-wired calibration reader all cluster there; and (2) the newly added pose-covariance feature is *mathematically implemented correctly as a conditional covariance* but is over-confident, non-metric in monocular, absent in inertial mode, and discontinuous at its fallback boundary. A new engineer should treat pure-visual stereo/RGBD as the most trustworthy path today, and the VI-monocular and fisheye paths as needing the fixes below before field use.
+The `lyrical` fork is, on the whole, a faithful and now materially hardened ORB-SLAM3: the front-end, tracking state machine, local/global BA, loop-and-merge correction, and Atlas multi-map machinery all follow the published algorithms, and the ~25 applied fixes plus the restored `System::Shutdown()` wait loop close several genuine crash and race classes. However, this full-repository pass surfaced **47 distinct correctness findings that survived adversarial verification**, including eight High-severity defects that are live crashes, hangs, or silent estimator corruption on supported sensor configurations (visual-inertial monocular, stereo-fisheye, and the ROS TF tree). A supplementary IMU-preintegration pass (Forster 2017, equation-by-equation) adds five further findings — for **52 in total** — and confirms the core preintegration recursion and `EdgeInertial` Jacobians as a faithful, correct implementation. Two themes dominate: (1) the multi-camera (KannalaBrandt fisheye) paths remain the least-tested surface — several out-of-bounds indexes, a wrong-camera projection, and a mis-wired calibration reader all cluster there; and (2) the newly added pose-covariance feature is *mathematically implemented correctly as a conditional covariance* but is over-confident, non-metric in monocular, absent in inertial mode, and discontinuous at its fallback boundary. A new engineer should treat pure-visual stereo/RGBD as the most trustworthy path today, and the VI-monocular and fisheye paths as needing the fixes below before field use.
 
 | Severity | Count |
 |----------|-------|
 | High     | 8     |
-| Medium   | 21    |
-| Low      | 18    |
-| **Total**| **47**|
+| Medium   | 23    |
+| Low      | 21    |
+| **Total**| **52**|
 
 *Several findings are marked where the underlying verification was only "plausible" (roughly one confirming and one refuting adversarial pass) or where investigator confidence was low; these are called out inline.*
+
+## Remediation status (this session)
+
+Eight findings were fixed and build-verified (`colcon build`, ROS 2 Jazzy) in the
+same session as this report; the rest are documented for review. Six are
+crash / hang / undefined-behaviour defects — three of them regressions or
+interactions introduced by the earlier audit fixes — plus the two
+high-confidence IMU-maths corrections:
+
+| Finding | File | Fix |
+|---------|------|-----|
+| **H1** | `src/Tracking.cc` | `PreintegrateIMU` early-return paths now set a valid (empty) `mpImuPreintegratedFrame` + `mpLastKeyFrame`, so `PredictStateIMU`'s common branch no longer NULL-derefs (completes audit fix #9). |
+| **H3** | `src/LoopClosing.cc:767` | Pass the local `bFixedScale` (freed for VI-monocular before BA2) to `OptimizeSim3`, not the always-true member `mbFixScale`. |
+| **H4** | `src/LoopClosing.cc:2313` | Clear `mbFinishedGBA/mbRunningGBA` before the IMU-init early return, so `System::Shutdown()`'s restored wait can no longer hang. |
+| **H5** | `src/ORBmatcher.cc:1973` | Relocalization orientation check selects the correct left/right raw keypoint instead of indexing `mvKeysUn` out of bounds on fisheye. |
+| **H6** | `src/KeyFrameDatabase.cc:712` | Advance the iterator before `continue` on a bad KF, removing the LoopClosing infinite loop. |
+| **H8** | `src/Optimizer.cc` (`LocalInertialBA`) | Return after a force-stopped `optimize()` (0 iterations) instead of culling map-point observations on un-optimized residuals (fixes a regression from the audit's force-stop change). |
+| **IMU-1** | `src/G2oTypes.cc:720` | Multiply the `EdgeInertialGS` scale-column Jacobian by `s` (multiplicative-vertex chain rule). |
+| **IMU-5** | `include/G2oTypes.h:715` | `H = (H + H.transpose())/2` — real symmetrization instead of the `(H+H)/2` no-op. |
+
+**Deferred for a decision** (design or runtime-validation dependent): **H2**
+(VI-init deletes queued KeyFrames Tracking still owns — split verification;
+touches delicate VI-init lifetime) and **H7** (the node broadcasts `map→camera`
+directly, which double-parents `camera` under REP-105 when the shipped
+`base_to_camera` static TF is also running — a TF-contract change). The
+remaining Medium/Low items — especially the KannalaBrandt fisheye cluster
+(M9–M14, L11) and the covariance-feature improvements (M5, M6, M19, M20) — are
+documented below for prioritisation. All applied fixes are static- and
+build-verified only; the IMU / VI-init changes (H1, H8, IMU-1) should be
+validated on an inertial dataset (EuRoC / TUM-VI) before field use.
 
 ## Architecture — how the system works
 
@@ -78,6 +110,36 @@ Visual-inertial init (`InitializeIMU`, `1174`) collects the temporal KF chain, e
 Every optimizer wraps g2o. `PoseOptimization` (`Optimizer.cc:814`) is motion-only BA over a single `VertexSE3Expmap` with landmarks fixed inside each reprojection edge; four LM rounds re-classify inliers/outliers against chi2 (5.991/7.815), and at `it==2` the robust kernel is removed so the final round is plain weighted least squares. Reprojection edges use information `mvInvLevelSigma2[octave]·I` (divided additionally by `mpCamera->uncertainty2` for fisheye); inertial edges (`EdgeInertial`/`EdgeInertialGS`, `EdgeGyroRW`/`EdgeAccRW`) take information from the inverted preintegration covariance blocks with Huber `δ=sqrt(16.92)` (`2699`). Gauge is fixed by pinning the origin/init KF (LocalBA `1277`, essential graph `1614`), all poses in VI-init `InertialOptimization` (`3129`), and `pLoopKF` in the 4DoF graph (`5408`). Scale/gravity are handled by `VertexScale`+`VertexGDir` with `EdgeInertialGS` (scale free only for monocular, `3180`). `OptimizeEssentialGraph` (`1558`) is a Strasdat-style Sim3 pose graph [R18]; the 4DoF variant (`5349`) now correctly sets `matLambda(0,0)=(1,1)=(2,2)=1e3`. `LocalInertialBA`/`MergeInertialBA`/`FullInertialBA` build sliding temporal windows over `mPrevKF`, marginalize points, and downweight the window-boundary inertial edge (`info*1e-2`).
 
 The **new covariance block** (`Optimizer.cc:1113-1168`) forms `H = Σ Jᵀ Ω J` directly over inlier motion-only edges using the analytic pose Jacobians (`jacobianOplusXi`, column order `[ω;υ]` matching `SE3Quat::exp`), symmetrizes and eigen-decomposes it, and — gated on `>=6` inlier edges, solver success, and `λ_min > 1e-9·max(λ_max,1)` — stores `Σ = V diag(1/λ) Vᵀ = H^-1` into `Frame::mPoseCovariance`.
+
+### IMU preintegration (on-manifold)
+
+IMU preintegration lives in `IMU::Preintegrated`. `IntegrateNewMeasurement`
+(`src/ImuTypes.cc:177`) implements Forster's on-manifold recursion [R3],
+updating **position first** from the still-old rotation/velocity
+(`dP += dV·dt + ½·dR·acc·dt²`, `199`), then **velocity**
+(`dV += dR·acc·dt`, `200`), then **rotation last**
+(`dR = NormalizeRotation(dR·ΔRᵢ)`, `220`). The 9×9 covariance propagates
+`Σ = A·Σ·Aᵀ + B·N·Bᵀ` (`205-227`) with Forster's exact `A`/`B` blocks
+(`A(0,0)=ΔRᵀ`, `A(3,0)=−dR·dt·[acc]ₓ`, `A(6,3)=dt·I`; `B(0,0)=Jr·dt`), and the
+first-order bias Jacobians `JPa/JPg/JVa/JVg/JRg` (`213-231`) match Forster eqs
+(A.7–A.8), all evaluated at pre-update values;
+`GetDeltaRotation/Velocity/Position` (`283-307`) apply the first-order bias
+correction. On the g2o side (`src/G2oTypes.cc`), `ImuCamPose` (`25`) holds the
+body pose `Rwb/twb` plus per-camera `Rcw/tcw` and applies updates through
+`Update` (`192`, body-frame right-multiply `ExpSO3`) / `UpdateW` (`222`, 4-DoF
+yaw). `EdgeInertial::computeError` (`518`) forms `er = LogSO3(ΔRᵀ·Rbw1·Rwb2)`,
+`ev = Rbw1·(v2−v1−g·dt) − ΔV`, `ep = Rbw1·(p2−p1−v1·dt−½·g·dt²) − ΔP`;
+`linearizeOplus` (`540`) supplies the analytic 9×6/9×3 Jacobians (verified
+block-by-block against Forster). `EdgeInertialGS` (`600`) adds a
+gravity-direction vertex (`VertexGDir`, 2-DoF) and a `VertexScale`
+(multiplicative `s·exp(δ)`) for inertial initialization; `EdgeGyroRW`/`EdgeAccRW`
+are the bias random-walk edges. `ExpSO3`/`LogSO3` and the SO(3) right-Jacobians
+live at `781-858`; noise densities are scaled by `√(imuFreq)` in
+`Tracking.cc:614/1419`. **The core preintegration recursion and the
+`EdgeInertial` Jacobians are a faithful, correct implementation of Forster
+2017**; the remaining IMU issues (IMU-1…IMU-5 below) are in the auxiliary
+scale/gravity Jacobian, the noise-vs-`dt` scaling, and two numerical-robustness
+gaps.
 
 ### The ROS 2 integration
 
@@ -358,6 +420,77 @@ One-line: The viewer half of Shutdown is still commented out and no thread is ev
 **File** `Thirdparty/g2o/CMakeLists.txt:83`. `configure_file(config.h.in ${g2o_SOURCE_DIR}/config.h)` (`83`) writes into the checked-in source, and the top-level `install(FILES Thirdparty/g2o/config.h …)` (`CMakeLists.txt:174`) reads it back — fragile on read-only source exports, dirties git, and races parallel/multi-config builds. *Confidence medium.*
 **Trigger** A read-only source export (tarball, container COPY, CI), or two concurrent Debug+Release builds.
 **Fix** `configure_file(config.h.in ${CMAKE_CURRENT_BINARY_DIR}/config.h)`, add the binary dir to g2o's includes, and install from the binary dir. [R23]
+
+### IMU preintegration maths (supplementary pass)
+
+*These five items come from a dedicated `ImuTypes`/`G2oTypes` equation-by-equation
+pass against Forster 2017, re-run after the main workflow. They were
+**spot-verified against the current code** here but did not go through the full
+two-lens adversarial gate applied to the findings above; confidence is noted per
+item. **IMU-1 and IMU-5 are fixed in this session** (see Remediation status).*
+
+#### IMU-1. `EdgeInertialGS` scale-column Jacobian omits the multiplicative chain-rule factor `s` — **fixed**
+One-line: The scale direction of the VI-init Jacobian is wrong by exactly the current scale value. *(medium, high confidence)*
+**File** `src/G2oTypes.cc:720`. `VertexScale::oplusImpl` updates scale as
+`s ← s·exp(δ)` (`G2oTypes.h:315`), and the residual scales `(v2−v1)`/`(p2−p1)`
+by `s` (`computeError`, `640-641`), so the tangent Jacobian must carry the
+factor `s` — as the neighbouring Pose2/Vel2 columns (`707`,`711`) already do.
+The scale column emitted `Rbw1·(v2−v1)` (the `s=1` value).
+**Trigger** Monocular-inertial IMU initialization (`Optimizer.cc:3186`, scale
+free) with an initial scale far from 1: the Gauss-Newton step in the scale
+direction is mis-scaled by ~`s`, slowing/oscillating scale convergence.
+**Fix (applied)** Multiply both scale-column blocks by `s = VS->estimate()`.
+Present identically in upstream master. [R3][R1]
+
+#### IMU-2. Preintegration noise scaling assumes constant `dt = 1/imuFreq`, mis-weighting partial boundary sub-steps
+One-line: Discrete IMU noise is baked at a nominal rate but integrated over the actual per-step `dt`. *(medium, medium confidence)*
+**File** `src/ImuTypes.cc:227`. The discrete measurement noise uses a **fixed**
+nominal frequency (`Ng·√freq`, `Ngw/√freq`, `Tracking.cc:614/1419`), but
+`IntegrateNewMeasurement` receives the **actual** per-step `dt`, so `B·N·Bᵀ`
+scales as `Ng²·dt²·freq_nom` rather than the correct `Ng²·dt`, and the bias walk
+is added once per sample regardless of `dt`. The frame-boundary sub-steps
+(`Tracking.cc:1713/1729`) are partial intervals ≠ `1/freq`, and a variable IMU
+rate compounds it, so the resulting `EdgeInertial` information is systematically
+over/under-confident on those steps.
+**Trigger** Any non-nominal IMU spacing (boundary sub-steps, variable rate).
+**Fix** Scale the noise by the true `dt` (`B·(N/dt)·Bᵀ`, `+= N_walk·dt`) inside
+`IntegrateNewMeasurement`, or document the constant-rate assumption. [R3][R9]
+
+#### IMU-3. `LogSO3` loses the axis for rotations near 180°
+One-line: As `θ→π` the antisymmetric-part log returns ~0 instead of `π·axis`. *(low, medium confidence)*
+**File** `src/G2oTypes.cc:814`. `LogSO3` recovers the rotation vector from the
+antisymmetric part `w = sin θ·axis` rescaled by `θ/sin θ`; the `|sin θ|<1e-5`
+guard returns the near-zero `w` (norm ~`sin θ`) instead of `π·axis`. Benign for
+the small relative rotations in preintegration, but reachable in
+`OptimizeEssentialGraph4DoF` (`Edge4DoF`, `G2oTypes.h:834`) for a poorly
+initialised large loop, where it yields a bogus ~zero residual that stalls that
+constraint.
+**Trigger** A relative rotation near π passed to `LogSO3` during 4-DoF pose-graph
+optimization.
+**Fix** Add a `θ≈π` branch extracting the axis from `(R+I)/2` (largest-diagonal
+column) and returning `π·axis`, as in `Sophus::SO3::log`. [R9]
+
+#### IMU-4. `EdgeInertial` information inverts `C` with no ill-conditioning guard
+One-line: The eigenvalue floor robustifies only under-confident directions; a near-singular `C` yields a hard/NaN edge. *(low, medium confidence)*
+**File** `src/G2oTypes.cc:504`. `Info = C.block<9,9>(0,0).inverse()` then floors
+eigenvalues `<1e-12` to 0 — doing nothing when `C` is near-singular, where `Info`
+acquires huge (or NaN) eigenvalues and the inertial edge becomes an effectively
+hard/NaN constraint. A preintegration from very few sub-measurements has an
+almost-singular position block (position noise enters as `O(dt⁴)` per step),
+overlapping the near-empty-window failure of issue #730.
+**Trigger** A near-empty / very-short IMU window feeding `EdgeInertial`/`EdgeInertialGS`.
+**Fix** Also upper-bound the eigenvalues (or add a small Tikhonov `C+εI` before
+inversion) and skip the edge when `C` is non-finite or ill-conditioned. [R3][R4]
+
+#### IMU-5. `ConstraintPoseImu` symmetrization `H = (H+H)/2` is a no-op typo — **fixed**
+One-line: The defensive symmetrization of the 15×15 marginalization prior does nothing. *(low, high confidence)*
+**File** `include/G2oTypes.h:715`. The line meant to symmetrize the prior before
+eigen-decomposition adds `H` to itself instead of its transpose, returning `H`
+unchanged; `SelfAdjointEigenSolver` then reads a single triangle, so the intended
+averaging never happens (the sibling paths at `G2oTypes.cc:505`/`609` do it
+correctly). Benign for perfectly-symmetric input, inert exactly when
+marginalization round-off makes it asymmetric.
+**Fix (applied)** `H = (H + H.transpose())/2;`. [n/a]
 
 ## The new covariance feature — assessment
 

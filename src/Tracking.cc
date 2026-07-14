@@ -1637,6 +1637,12 @@ void Tracking::PreintegrateIMU()
     {
         Verbose::PrintMess("Not IMU data in mlQueueImuData!!", Verbose::VERBOSITY_NORMAL);
         mCurrentFrame.mpImuPreintegrated = mpImuPreintegratedFromLastKF;  // avoid a NULL preintegration downstream
+        // Also give the frame a valid (empty) frame-level preintegration and its
+        // last KF: the common !mbMapUpdated branch of PredictStateIMU() (and
+        // StereoInitialization/UpdateFrameIMU) dereferences mpImuPreintegratedFrame
+        // unconditionally, so leaving it NULL segfaults (issue #730). (INVESTIGATION.md H1)
+        mCurrentFrame.mpImuPreintegratedFrame = new IMU::Preintegrated(mLastFrame.mImuBias, mCurrentFrame.mImuCalib);
+        mCurrentFrame.mpLastKeyFrame = mpLastKeyFrame;
         mCurrentFrame.setIntegrated();
         return;
     }
@@ -1681,6 +1687,11 @@ void Tracking::PreintegrateIMU()
         // Leave a valid (KF-level) preintegration so PredictStateIMU() and the
         // inertial pose optimizers do not dereference a NULL pointer (issue #730).
         mCurrentFrame.mpImuPreintegrated = mpImuPreintegratedFromLastKF;
+        // ...and a valid (empty) frame-level preintegration + last KF for the
+        // common !mbMapUpdated PredictStateIMU() branch, which dereferences
+        // mpImuPreintegratedFrame without a NULL guard. (INVESTIGATION.md H1)
+        mCurrentFrame.mpImuPreintegratedFrame = new IMU::Preintegrated(mLastFrame.mImuBias, mCurrentFrame.mImuCalib);
+        mCurrentFrame.mpLastKeyFrame = mpLastKeyFrame;
         mCurrentFrame.setIntegrated();
         return;
     }

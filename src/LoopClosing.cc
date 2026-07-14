@@ -764,7 +764,11 @@ bool LoopClosing::DetectCommonRegionsFromBoW(std::vector<KeyFrame*> &vpBowCand, 
                     if(mpTracker->mSensor==System::IMU_MONOCULAR && !mpCurrentKF->GetMap()->GetIniertialBA2())
                         bFixedScale=false;
 
-                    int numOptMatches = Optimizer::OptimizeSim3(mpCurrentKF, pKFi, vpMatchedMP, gScm, 10, mbFixScale, mHessian7x7, true);
+                    // Use the local bFixedScale (freed for monocular-inertial before BA2),
+                    // not the member mbFixScale which is always true for IMU sensors —
+                    // otherwise scale is frozen while the map is still scale-ambiguous.
+                    // (INVESTIGATION.md H3)
+                    int numOptMatches = Optimizer::OptimizeSim3(mpCurrentKF, pKFi, vpMatchedMP, gScm, 10, bFixedScale, mHessian7x7, true);
 
                     if(numOptMatches >= nSim3Inliers)
                     {
@@ -2310,7 +2314,14 @@ void LoopClosing::RunGlobalBundleAdjustment(Map* pActiveMap, unsigned long nLoop
             return;
 
         if(!bImuInit && pActiveMap->isImuInitialized())
+        {
+            // This visual GBA was superseded by IMU initialization: discard its
+            // result, but clear the run flags first, or isRunningGBA() stays true
+            // forever and the restored System::Shutdown() wait hangs. (INVESTIGATION.md H4)
+            mbFinishedGBA = true;
+            mbRunningGBA = false;
             return;
+        }
 
         if(!mbStopGBA)
         {
