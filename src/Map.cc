@@ -359,7 +359,11 @@ void Map::SetLastMapChange(int currentChangeId)
 void Map::PreSave(std::set<GeometricCamera*> &spCams)
 {
     int nMPWithoutObs = 0;
-    for(MapPoint* pMPi : mspMapPoints)
+    // Iterate a snapshot: EraseObservation() below can drop a point below 2
+    // observations -> SetBadFlag -> Map::EraseMapPoint -> mspMapPoints.erase(), which
+    // would invalidate a range-for iterator over mspMapPoints itself. (INVESTIGATION.md M15)
+    const std::vector<MapPoint*> vpMapPointsSnapshot(mspMapPoints.begin(), mspMapPoints.end());
+    for(MapPoint* pMPi : vpMapPointsSnapshot)
     {
         if(!pMPi || pMPi->isBad())
             continue;

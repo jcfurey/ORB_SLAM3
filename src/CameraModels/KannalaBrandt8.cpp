@@ -118,7 +118,13 @@ namespace ORB_SLAM3 {
         cv::Point2f pw((p2D.x - mvParameters[2]) / mvParameters[0], (p2D.y - mvParameters[3]) / mvParameters[1]);
         float scale = 1.f;
         float theta_d = sqrtf(pw.x * pw.x + pw.y * pw.y);
-        theta_d = fminf(fmaxf(-CV_PI / 2.f, theta_d), CV_PI / 2.f);
+        // theta_d is a (non-negative) radius, so the original fmaxf(-pi/2, .) was dead
+        // code. The upper clamp caps incidence at ~90 deg and, with the z=+1 ray
+        // convention returned below (which the DLT triangulator depends on), true
+        // >90 deg (very-wide fisheye) rays cannot be represented; those border
+        // features are clamped rather than mis-signed. Full >90 deg support needs a
+        // unit-ray convention through all consumers. (INVESTIGATION.md M12)
+        theta_d = fminf(theta_d, CV_PI / 2.f);
 
         if (theta_d > 1e-8) {
             //Compensate distortion iteratively
@@ -145,6 +151,17 @@ namespace ORB_SLAM3 {
     Eigen::Matrix<double, 2, 3> KannalaBrandt8::projectJac(const Eigen::Vector3d &v3D) {
         double x2 = v3D[0] * v3D[0], y2 = v3D[1] * v3D[1], z2 = v3D[2] * v3D[2];
         double r2 = x2 + y2;
+        if (r2 < 1e-12) {
+            // On the optical axis (x=y=0) the r2/r3 denominators below are 0/0 -> NaN,
+            // which poisons the whole g2o Hessian. The fisheye projection is locally
+            // pinhole as theta->0, so d u/dx = fx/z, d v/dy = fy/z, other terms -> 0.
+            // (INVESTIGATION.md M11)
+            Eigen::Matrix<double, 2, 3> Jac = Eigen::Matrix<double, 2, 3>::Zero();
+            const double invz = (std::abs(v3D[2]) > 1e-12) ? 1.0 / v3D[2] : 0.0;
+            Jac(0, 0) = mvParameters[0] * invz;
+            Jac(1, 1) = mvParameters[1] * invz;
+            return Jac;
+        }
         double r = sqrt(r2);
         double r3 = r2 * r;
         double theta = atan2(r, v3D[2]);

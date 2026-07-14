@@ -1962,6 +1962,10 @@ void LoopClosing::MergeLocal2()
     vector<MapPoint*> vpCheckFuseMapPoint; // MapPoint vector from current map to allow to fuse duplicated points with the old map (merge)
     vector<KeyFrame*> vpCurrentConnectedKFs;
 
+    // Clear stale entries from a previous merge: this member vector is only
+    // truncated to 6, never cleared, so a second merge would keep the first merge's
+    // KFs and drop the new ones past index 6. (INVESTIGATION.md M3)
+    mvpMergeConnectedKFs.clear();
     mvpMergeConnectedKFs.push_back(mpMergeMatchedKF);
     vector<KeyFrame*> aux = mpMergeMatchedKF->GetVectorCovisibleKeyFrames();
     mvpMergeConnectedKFs.insert(mvpMergeConnectedKFs.end(), aux.begin(), aux.end());

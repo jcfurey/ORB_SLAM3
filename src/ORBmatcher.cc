@@ -569,13 +569,11 @@ namespace ORB_SLAM3
             if(p3Dc(2)<0.0)
                 continue;
 
-            // Project into Image
-            const float invz = 1/p3Dc(2);
-            const float x = p3Dc(0)*invz;
-            const float y = p3Dc(1)*invz;
-
-            const float u = fx*x+cx;
-            const float v = fy*y+cy;
+            // Project with the actual camera model (pinhole OR fisheye), not a
+            // hardcoded pinhole. (INVESTIGATION.md M10)
+            const Eigen::Vector2f uvp = pKF->mpCamera->project(p3Dc);
+            const float u = uvp(0);
+            const float v = uvp(1);
 
             // Point must be inside the image
             if(!pKF->IsInImage(u,v))
@@ -1269,7 +1267,11 @@ namespace ORB_SLAM3
                 if(kpLevel<nPredictedLevel-1 || kpLevel>nPredictedLevel)
                     continue;
 
-                if(pKF->mvuRight[idx]>=0)
+                // For a fisheye rig (mpCamera2 != null) idx is a local right index in
+                // [0,NRight) not yet offset by NLeft, and mvuRight has size NLeft, so
+                // this stereo-disparity read would be wrong/out-of-bounds; fisheye has
+                // no horizontal disparity anyway, so take the mono branch. (INVESTIGATION.md M9)
+                if(!pKF->mpCamera2 && pKF->mvuRight[idx]>=0)
                 {
                     // Check reprojection error in stereo
                     const float &kpx = kp.pt.x;
@@ -1511,12 +1513,12 @@ namespace ORB_SLAM3
             if(p3Dc2(2)<0.0)
                 continue;
 
-            const float invz = 1.0/p3Dc2(2);
-            const float x = p3Dc2(0)*invz;
-            const float y = p3Dc2(1)*invz;
-
-            const float u = fx*x+cx;
-            const float v = fy*y+cy;
+            // Use the actual camera model (pinhole OR KannalaBrandt fisheye); the
+            // hardcoded u=fx*x+cx is wrong for fisheye and silently loses off-axis
+            // loop/merge correspondences. (INVESTIGATION.md M10)
+            const Eigen::Vector2f uv2 = pKF2->mpCamera->project(p3Dc2);
+            const float u = uv2(0);
+            const float v = uv2(1);
 
             // Point must be inside the image
             if(!pKF2->IsInImage(u,v))
@@ -1591,12 +1593,10 @@ namespace ORB_SLAM3
             if(p3Dc1(2)<0.0)
                 continue;
 
-            const float invz = 1.0/p3Dc1(2);
-            const float x = p3Dc1(0)*invz;
-            const float y = p3Dc1(1)*invz;
-
-            const float u = fx*x+cx;
-            const float v = fy*y+cy;
+            // Use the actual camera model (pinhole OR KannalaBrandt fisheye). (INVESTIGATION.md M10)
+            const Eigen::Vector2f uv1 = pKF1->mpCamera->project(p3Dc1);
+            const float u = uv1(0);
+            const float v = uv1(1);
 
             // Point must be inside the image
             if(!pKF1->IsInImage(u,v))

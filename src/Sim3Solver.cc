@@ -381,10 +381,9 @@ void Sim3Solver::ComputeSim3(Eigen::Matrix3f &P1, Eigen::Matrix3f &P2)
 
     if(!mbFixScale)
     {
-        double cvnom = Converter::toCvMat(Pr1).dot(Converter::toCvMat(P3));
+        // (Removed a per-iteration cv::Mat cross-check of `nom` that heap-allocated
+        // two matrices every RANSAC sample purely to print a debug warning. (INVESTIGATION.md L12)
         double nom = (Pr1.array() * P3.array()).sum();
-        if (abs(nom-cvnom)>1e-3)
-            std::cout << "sim3 solver: " << abs(nom-cvnom) << std::endl << nom << std::endl;
         Eigen::Array<float,3,3> aux_P3;
         aux_P3 = P3.array() * P3.array();
         double den = aux_P3.sum();

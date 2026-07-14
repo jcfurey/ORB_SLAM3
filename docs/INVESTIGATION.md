@@ -51,11 +51,13 @@ The `lyrical` fork is, on the whole, a faithful and now materially hardened ORB-
 
 ## Remediation status (this session)
 
-Eight findings were fixed and build-verified (`colcon build`, ROS 2 Jazzy) in the
-same session as this report; the rest are documented for review. Six are
-crash / hang / undefined-behaviour defects — three of them regressions or
-interactions introduced by the earlier audit fixes — plus the two
-high-confidence IMU-maths corrections:
+The findings below were fixed, build-verified (`colcon build`, ROS 2 Jazzy) and
+smoke-tested in the same session as this report; the rest are documented for
+review.
+
+**Core SLAM — crash / hang / UB and maths.** Six are crash / hang /
+undefined-behaviour defects (three of them regressions or interactions from the
+earlier audit fixes) plus the two high-confidence IMU-maths corrections:
 
 | Finding | File | Fix |
 |---------|------|-----|
@@ -68,16 +70,60 @@ high-confidence IMU-maths corrections:
 | **IMU-1** | `src/G2oTypes.cc:720` | Multiply the `EdgeInertialGS` scale-column Jacobian by `s` (multiplicative-vertex chain rule). |
 | **IMU-5** | `include/G2oTypes.h:715` | `H = (H + H.transpose())/2` — real symmetrization instead of the `(H+H)/2` no-op. |
 
-**Deferred for a decision** (design or runtime-validation dependent): **H2**
-(VI-init deletes queued KeyFrames Tracking still owns — split verification;
-touches delicate VI-init lifetime) and **H7** (the node broadcasts `map→camera`
-directly, which double-parents `camera` under REP-105 when the shipped
-`base_to_camera` static TF is also running — a TF-contract change). The
-remaining Medium/Low items — especially the KannalaBrandt fisheye cluster
-(M9–M14, L11) and the covariance-feature improvements (M5, M6, M19, M20) — are
-documented below for prioritisation. All applied fixes are static- and
-build-verified only; the IMU / VI-init changes (H1, H8, IMU-1) should be
-validated on an inertial dataset (EuRoC / TUM-VI) before field use.
+**ROS 2 integration & covariance — robot_localization compatibility.** The node
+is now a well-behaved REP-105 map-frame source for `robot_localization` and
+similar EKF/UKF filters (see [`docs/ROBOT_LOCALIZATION.md`](ROBOT_LOCALIZATION.md),
+`config/ekf_map.yaml`, `launch/robot_localization.launch.py`):
+
+| Finding | File | Fix |
+|---------|------|-----|
+| **H7** | `orb_slam3_ros/src/orb_slam3_node.cpp` | New `base_frame_id` mode republishes pose/odom/TF as **base_link-in-map** via the static `camera→base` TF; with `publish_tf:=false` the map EKF owns `map→odom`, giving a single-parent REP-105 tree (no double-parented `camera`). |
+| **L16** | `orb_slam3_node.cpp` | Reject/clamp non-positive `pose_covariance_diagonal` entries at load. |
+| **M19** | `orb_slam3_node.cpp` | Warn once that monocular g2o covariance is non-metric (map-scale). |
+| **M20** | `orb_slam3_node.cpp` | Smooth the g2o→quality fallback so `~/odom` never jumps 1–3 orders of magnitude. |
+| *(SPD)* | `orb_slam3_node.cpp` | Every published covariance is symmetrized + eigenvalue-floored to strictly SPD/finite, so a fusion filter's Cholesky never rejects it. |
+| **M5** | `src/Optimizer.cc` | Corrected the misleading "exact" comment on the motion-only marginal — it is a *conditional* (map-fixed), optimistic covariance; de-weight downstream with `covariance_g2o_scale`. |
+
+**Multi-camera (KannalaBrandt fisheye) & geometry.**
+
+| Finding | File | Fix |
+|---------|------|-----|
+| **M7** | `src/Optimizer.cc` (`OptimizeSim3`) | Set the synthetic out-of-KF2 keypoint's octave explicitly (the 2nd ctor arg is `_size`), so it is no longer weighted at max information. |
+| **M9** | `src/ORBmatcher.cc` (`Fuse`) | Guard the stereo-disparity read with `!mpCamera2` so a fisheye right index doesn't read `mvuRight` out of bounds. |
+| **M10** | `src/ORBmatcher.cc` (`SearchBySim3`, `SearchByProjection`) | Project with `mpCamera->project()` (pinhole OR fisheye), not a hardcoded `fx*x+cx`. |
+| **M11** | `src/CameraModels/KannalaBrandt8.cpp` | Guard `projectJac` on the optical axis (0/0 → NaN that poisoned the Hessian). |
+| **M13** | `src/TwoViewReconstruction.cc` | Honor `Triangulate`'s bool return so an uninitialized 3D point can't enter the reconstruction. |
+| **M14** | `src/Settings.cc` | Read Camera2's fisheye distortion from `Camera2.k1..k4`, not `Camera1.*`. |
+| **M12** | `src/CameraModels/KannalaBrandt8.cpp` | Removed the dead `fmaxf(-π/2,·)`; documented the ~90° incidence limit (full >90° support needs a unit-ray convention through all consumers — deferred). |
+
+**Thread-safety & remaining correctness.**
+
+| Finding | File | Fix |
+|---------|------|-----|
+| **H2** | `src/LocalMapping.cc` | VI-init/ScaleRefinement no longer `delete` queued KeyFrames Tracking may still own (flag bad; never-free reclaims) — removes a use-after-free. |
+| **M1** | `src/Tracking.cc` | Advance the temporal-KF cursor every iteration so the VI local-BA window actually gets its adjacent keyframes. |
+| **M2** | `include/LocalMapping.h` | `mbBadImu` is now `std::atomic<bool>` (raced read on the Tracking thread). |
+| **M3** | `src/LoopClosing.cc` | Clear `mvpMergeConnectedKFs` at the start of `MergeLocal2` (stale first-merge KFs otherwise persisted). |
+| **M15** | `src/Map.cc` | `PreSave` iterates a snapshot (EraseObservation could erase from `mspMapPoints` mid range-for). |
+| **M16** | `src/Atlas.cc` | `SetMapBad`/`RemoveBadMaps` take `mMutexAtlas` (raced map-set mutation). |
+| **M17** | `orb_slam3_node.cpp` | Bounded IMU buffer (`imu_buffer_max`) with a throttled drop warning (unbounded growth on a clock offset). |
+| **L6** | `src/Optimizer.cc` | Clear a stale `mbHasPoseCovariance` on the `<3`-correspondence early return. |
+| **L12** | `src/Sim3Solver.cc` | Removed a per-RANSAC-iteration `cv::Mat` debug cross-check (heap churn). |
+| **L13** | `src/MLPnPsolver.cpp` | Clamp the `acos` domain in `rot2rodrigues` (round-off NaN silently zeroed a real rotation). |
+| **L14** | `src/System.cc` | Zero `mTrackedInliers` on non-OK frames (it was stale from the last success). |
+| **L15** | `orb_slam3_node.cpp` | `track_rate_hz_` / `last_cov_scale_` are atomic (raced with the diagnostics timer). |
+
+**Still deferred** (deeper, lower-value, or needing dataset/runtime validation):
+**M6** (inertial-mode covariance — different tangent ordering; a wrong one is worse
+for a filter than the honest fallback), **M4** (GBA staleness token under lock),
+**M8** (MergeInertialBA free vertices), **M18** (per-map path/TF discontinuity —
+needs a `System` active-map-id API), **M21** (viewer-thread join on Shutdown —
+masked by the ROS default `use_pangolin_viewer:=false`), the full >90° fisheye
+unproject (M12 remainder) and the right-camera reloc pass (**L11**), and the minor
+optimizer/robustness items (L1, L3, L4, L5, L7, L8, L9, L10). All applied fixes are
+static- and build-verified (node changes also smoke-tested); the IMU / VI-init /
+fisheye changes should be validated on an inertial / TUM-VI dataset, and the
+base-frame republish on a live tf tree, before field use.
 
 ## Architecture — how the system works
 

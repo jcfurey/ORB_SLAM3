@@ -259,6 +259,9 @@ Map* Atlas::GetCurrentMap()
 
 void Atlas::SetMapBad(Map* pMap)
 {
+    // Guard the map-set mutation against concurrent locked traversals
+    // (GetAllMaps/CountMaps/CreateNewMap) on other threads. (INVESTIGATION.md M16)
+    unique_lock<mutex> lock(mMutexAtlas);
     mspMaps.erase(pMap);
     pMap->SetBad();
 
@@ -267,6 +270,7 @@ void Atlas::SetMapBad(Map* pMap)
 
 void Atlas::RemoveBadMaps()
 {
+    unique_lock<mutex> lock(mMutexAtlas);   // see SetMapBad (INVESTIGATION.md M16)
     /*for(Map* pMap : mspBadMaps)
     {
         delete pMap;

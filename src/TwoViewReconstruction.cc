@@ -829,10 +829,11 @@ namespace ORB_SLAM3
             Eigen::Vector3f x_p1(kp1.pt.x, kp1.pt.y, 1);
             Eigen::Vector3f x_p2(kp2.pt.x, kp2.pt.y, 1);
 
-            GeometricTools::Triangulate(x_p1, x_p2, P1, P2, p3dC1);
-
-
-            if(!isfinite(p3dC1(0)) || !isfinite(p3dC1(1)) || !isfinite(p3dC1(2)))
+            // Triangulate returns false (without writing p3dC1) for a degenerate
+            // null vector; the original code ignored that and tested isfinite() on
+            // uninitialized stack memory. (INVESTIGATION.md M13)
+            if(!GeometricTools::Triangulate(x_p1, x_p2, P1, P2, p3dC1) ||
+               !isfinite(p3dC1(0)) || !isfinite(p3dC1(1)) || !isfinite(p3dC1(2)))
             {
                 vbGood[vMatches12[i].first]=false;
                 continue;

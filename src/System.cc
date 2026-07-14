@@ -327,7 +327,7 @@ Sophus::SE3f System::TrackStereo(const cv::Mat &imLeft, const cv::Mat &imRight, 
     mTrackingState = mpTracker->mState;
     mTrackedMapPoints = mpTracker->mCurrentFrame.mvpMapPoints;
     mTrackedKeyPointsUn = mpTracker->mCurrentFrame.mvKeysUn;
-    mTrackedInliers = mpTracker->GetMatchesInliers();
+    mTrackedInliers = (mpTracker->mState == Tracking::OK) ? mpTracker->GetMatchesInliers() : 0;  // 0 when not OK (INVESTIGATION.md L14)
     mbTrackedPoseCovarianceValid = mpTracker->mCurrentFrame.mbHasPoseCovariance;
     if(mbTrackedPoseCovarianceValid)
         mTrackedPoseCovariance = mpTracker->mCurrentFrame.mPoseCovariance;
@@ -403,7 +403,7 @@ Sophus::SE3f System::TrackRGBD(const cv::Mat &im, const cv::Mat &depthmap, const
     mTrackingState = mpTracker->mState;
     mTrackedMapPoints = mpTracker->mCurrentFrame.mvpMapPoints;
     mTrackedKeyPointsUn = mpTracker->mCurrentFrame.mvKeysUn;
-    mTrackedInliers = mpTracker->GetMatchesInliers();
+    mTrackedInliers = (mpTracker->mState == Tracking::OK) ? mpTracker->GetMatchesInliers() : 0;  // 0 when not OK (INVESTIGATION.md L14)
     mbTrackedPoseCovarianceValid = mpTracker->mCurrentFrame.mbHasPoseCovariance;
     if(mbTrackedPoseCovarianceValid)
         mTrackedPoseCovariance = mpTracker->mCurrentFrame.mPoseCovariance;
@@ -483,7 +483,7 @@ Sophus::SE3f System::TrackMonocular(const cv::Mat &im, const double &timestamp, 
     mTrackingState = mpTracker->mState;
     mTrackedMapPoints = mpTracker->mCurrentFrame.mvpMapPoints;
     mTrackedKeyPointsUn = mpTracker->mCurrentFrame.mvKeysUn;
-    mTrackedInliers = mpTracker->GetMatchesInliers();
+    mTrackedInliers = (mpTracker->mState == Tracking::OK) ? mpTracker->GetMatchesInliers() : 0;  // 0 when not OK (INVESTIGATION.md L14)
     mbTrackedPoseCovarianceValid = mpTracker->mCurrentFrame.mbHasPoseCovariance;
     if(mbTrackedPoseCovarianceValid)
         mTrackedPoseCovariance = mpTracker->mCurrentFrame.mPoseCovariance;

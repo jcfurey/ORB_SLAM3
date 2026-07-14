@@ -684,7 +684,10 @@ namespace ORB_SLAM3 {
         omega << 0.0, 0.0, 0.0;
 
         double trace = R.trace() - 1.0;
-        double wnorm = acos(trace / 2.0);
+        // Clamp before acos: round-off can push (trace)/2 slightly outside [-1,1],
+        // giving NaN, and the guard below (NaN > eps is false) then silently returns a
+        // zero rotation for a real one. (INVESTIGATION.md L13)
+        double wnorm = acos(std::min(1.0, std::max(-1.0, trace / 2.0)));
         if (wnorm > std::numeric_limits<double>::epsilon())
         {
             omega[0] = (R(2, 1) - R(1, 2));

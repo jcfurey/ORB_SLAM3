@@ -28,6 +28,7 @@
 #include "Settings.h"
 
 #include <mutex>
+#include <atomic>
 
 
 namespace ORB_SLAM3
@@ -103,7 +104,9 @@ public:
 
     bool mbNotBA1;
     bool mbNotBA2;
-    bool mbBadImu;
+    // Written on the LocalMapping thread, read every frame on the Tracking thread
+    // (Tracking.cc) with no lock -> make it atomic to avoid a data race. (INVESTIGATION.md M2)
+    std::atomic<bool> mbBadImu;
 
     bool mbWriteStats;
 

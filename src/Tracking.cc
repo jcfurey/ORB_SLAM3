@@ -3602,8 +3602,12 @@ void Tracking::UpdateLocalKeyFrames()
             {
                 mvpLocalKeyFrames.push_back(tempKeyFrame);
                 tempKeyFrame->mnTrackReferenceForFrame=mCurrentFrame.mnId;
-                tempKeyFrame=tempKeyFrame->mPrevKF;
             }
+            // Advance every iteration, not only when a KF was added: the last KF is
+            // usually already in the window from the covisibility loop, so keeping the
+            // advance inside the if left the cursor stuck and added zero temporal KFs,
+            // starving the VI local-BA window. (INVESTIGATION.md M1)
+            tempKeyFrame=tempKeyFrame->mPrevKF;
         }
     }
 

@@ -1414,8 +1414,12 @@ void LocalMapping::InitializeIMU(float priorG, float priorA, bool bFIBA)
 
     for(list<KeyFrame*>::iterator lit = mlNewKeyFrames.begin(), lend=mlNewKeyFrames.end(); lit!=lend; lit++)
     {
+        // Do NOT delete: during VIBA1/VIBA2 the map is already IMU-initialized, so
+        // Tracking keeps creating KeyFrames; one queued after the last drain can be
+        // Tracking's live mpLastKeyFrame / in the temporal chain / hold observations,
+        // and freeing it dangles those pointers (use-after-free). Flag it bad and let
+        // the flag-bad-never-free model reclaim it, as elsewhere. (INVESTIGATION.md H2)
         (*lit)->SetBadFlag();
-        delete *lit;
     }
     mlNewKeyFrames.clear();
 
@@ -1483,8 +1487,8 @@ void LocalMapping::ScaleRefinement()
 
     for(list<KeyFrame*>::iterator lit = mlNewKeyFrames.begin(), lend=mlNewKeyFrames.end(); lit!=lend; lit++)
     {
+        // See InitializeIMU: do not free a KeyFrame Tracking may still own. (INVESTIGATION.md H2)
         (*lit)->SetBadFlag();
-        delete *lit;
     }
     mlNewKeyFrames.clear();
 

@@ -994,7 +994,13 @@ int Optimizer::PoseOptimization(Frame *pFrame)
     }
 
     if(nInitialCorrespondences<3)
+    {
+        // Clear any stale covariance from an earlier optimization of this same Frame
+        // (e.g. the relocalization retry ladder), or the updated pose would carry an
+        // old, now-inconsistent covariance. (INVESTIGATION.md L6)
+        pFrame->mbHasPoseCovariance = false;
         return 0;
+    }
 
     // We perform 4 optimizations, after each optimization we classify observation as inlier/outlier
     // At the next optimization, outliers are not included, but at the end they can be classified as inliers again.
@@ -1110,16 +1116,21 @@ int Optimizer::PoseOptimization(Frame *pFrame)
             SE3quat_recov.translation().cast<float>());
     pFrame->SetPose(pose);
 
-    // Marginal covariance of the optimized pose (Laplace approximation):
+    // CONDITIONAL covariance of the optimized pose (Laplace approximation):
     // Sigma = H^-1 with the 6x6 information H = sum_i J_i^T Omega_i J_i over the
-    // INLIER (level-0) reprojection edges, evaluated at the final estimate. This
-    // is exact for motion-only BA -- the pose is the only optimizable vertex, so
-    // no Schur marginalization is needed. computeMarginals() is unusable in this
-    // vendored g2o (no linear solver implements solvePattern), hence the direct
+    // INLIER (level-0) reprojection edges, evaluated at the final estimate. Because
+    // motion-only BA holds the 3D landmarks FIXED, this is the pose covariance
+    // *conditioned on a perfect map*, NOT the joint marginal: the true marginal
+    // subtracts the Schur term H_pl H_ll^-1 H_lp (a PSD matrix), so H^-1 here is
+    // systematically OPTIMISTIC when the map points carry real uncertainty (low
+    // parallax / distant). Consumers should treat it as a lower bound and inflate
+    // (the ROS wrapper's covariance_g2o_scale). No Schur term is computed because
+    // the pose is g2o's only optimizable vertex; computeMarginals() is unusable in
+    // this vendored g2o (no linear solver implements solvePattern), hence the direct
     // accumulation. Kept in g2o's SE3 tangent ordering [omega(rot); upsilon(trans)]
     // as a left-perturbation of Tcw; the ROS wrapper does the frame transform.
     // Robust kernels are cleared after it==2 above, so inlier residuals here carry
-    // unit weight, matching this un-robustified information sum.
+    // unit weight, matching this un-robustified information sum. (INVESTIGATION.md M5)
     {
         Eigen::Matrix<double,6,6> H = Eigen::Matrix<double,6,6>::Zero();
         for(size_t i=0, iend=vpEdgesMono.size(); i<iend; i++)
@@ -2334,7 +2345,13 @@ int Optimizer::OptimizeSim3(KeyFrame *pKF1, KeyFrame *pKF2, vector<MapPoint *> &
             float y = P3D2c(1)*invz;
 
             obs2 << x, y;
-            kpUn2 = cv::KeyPoint(cv::Point2f(x, y), pMP2->mnTrackScaleLevel);
+            // The 2nd cv::KeyPoint ctor arg is _size, not _octave, so octave stayed 0
+            // and these synthetic (out-of-KF2) matches were weighted at
+            // mvInvLevelSigma2[0]=1.0 (max information). Set the octave explicitly (and
+            // clamp it into range) so their weight matches their scale. (INVESTIGATION.md M7)
+            kpUn2 = cv::KeyPoint(cv::Point2f(x, y), 1.f);
+            kpUn2.octave = std::min(std::max(pMP2->mnTrackScaleLevel, 0),
+                                    static_cast<int>(pKF2->mvInvLevelSigma2.size()) - 1);
 
             inKF2 = false;
             nOutKF2++;
